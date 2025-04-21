@@ -13,6 +13,8 @@ env/
 
 # Ignore log files
 *.log
+*.out
+*.err
 
 # Ignore data files
 *.csv
