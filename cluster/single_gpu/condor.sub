@@ -1,9 +1,9 @@
 
 # Executable should be a full path
-executable=/home/najroldi/plainLM/cluster/single_gpu/condor.sh
+executable=/home/ltrochelmann/LN-variants/cluster/single_gpu/condor.sh
 
 # Hyperparmeters are specified in a YAML configuration file
-config=config/config.yaml
+config=/home/ltrochelmann/LN-variants/config/tr_70M.yaml
 
 # Queue as many jobs as points in the hyperaparameter grid
 n_jobs=1
@@ -12,7 +12,7 @@ n_jobs=1
 arguments = $(config) $(Process)
 
 # Logs
-LOGS_DIR=/fast/najroldi/logs/plainLM
+LOGS_DIR=/home/ltrochelmann/LN-variants/logs
 error = $(LOGS_DIR)/err/job.$(Cluster).$(Process).err
 output = $(LOGS_DIR)/out/job.$(Cluster).$(Process).out
 log = $(LOGS_DIR)/log/job.$(Cluster).$(Process).log
