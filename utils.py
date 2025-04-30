@@ -74,8 +74,28 @@ def maybe_make_dir(cfg, job_idx=None):
     yaml.dump(cfg._asdict(), file, default_flow_style=False)
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size):
-  "Computes new metrcs and appends them to metrics. Logs on wandb. Prints log."
+def compute_grad_norms(model):
+  """Computes gradient l2 norms for the last layer of each MLP.
+    
+  Returns:
+      dict: A dictionary mapping layer names to their gradient norms
+  """
+  grad_norms = {}
+  for name, param in model.named_parameters():
+    if param.grad is None or not name.endswith("mlp.fc2.weight"):
+      continue
+    else:
+      with torch.no_grad():
+        grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm().item()
+
+  if grad_norms == {}:
+      print("Warning: Attempted to fetch gradient norms, but the requested parameter was name not found or the gradient is None.")
+
+  return grad_norms
+
+
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None):
+  "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
   # NOTE: valid_loss is a float, already reduced across GPUs
 
@@ -93,6 +113,11 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
     new_metrics["valid/ppl"] = math.exp(valid_loss)
+  
+  # Add gradient norms if model is provided
+  if model is not None:
+    grad_norms = compute_grad_norms(model)
+    new_metrics.update(grad_norms)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
