@@ -54,24 +54,24 @@ lr_end: 0.0
 lr_end_pct: null
 
 log_every_steps: 16
-print_progress: False
+print_progress: false
 
 use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_baseline'
-exp_name: 'tr_70M_sp_baseline'
+wandb_run_name: 'tr_70M_sp_test-tracking'
+exp_name: 'tr_70M_sp_test-tracking'
 check_existing_wandb_run: False
 
 resume: False
 resume_step: null
 resume_exp_name: null
 
-out_dir: '/fast/ltrochelmann/exp/baseline'
+out_dir: '/fast/ltrochelmann/exp/tests'
 save_last_checkpoint: False
 save_intermediate_checkpoints: False
-save_every_steps: nulll
+save_every_steps: null
 
 save_optim: False
 save_scheduler: False
