@@ -5,7 +5,7 @@ seed: 7
 cuda_matmul_allow_tf32: True
 cudnn_allow_tf32: True
 
-trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_15B_tokens/train"  # /train or /train_tokenized?
+trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_15B_tokens/train"
 vocab_size: 50280  # Taking 50280 from the other slim_pajama configs
 seq_len: 2048
 sampler: 'random'
@@ -60,9 +60,11 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_test-tracking'
-exp_name: 'tr_70M_sp_test-tracking'
+wandb_run_name: 'tr_70M_sp_test-mu-tracking'
+exp_name: 'tr_70M_sp_test-mu-tracking'
 check_existing_wandb_run: False
+track_model_update: True
+track_grad_norm: True
 
 resume: False
 resume_step: null
