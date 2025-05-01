@@ -4,12 +4,14 @@ from absl import app, flags
 from collections import defaultdict
 
 import utils
+import torch
 from utils import print_master
 from torch_utils import pytorch_setup, destroy_ddp
 from data import get_dataloaders
 from checkpoint_utils import save_checkpoint, maybe_load_checkpoint
 from models import construct_model
 from engine import TorchEngine
+from engine.engine import _move_to_device
 
 flags.DEFINE_string('config', 'config/config.yaml', 'Path to config.yaml file.')
 flags.DEFINE_integer('job_idx', None, 'Job idx for job-array sweeps. From 0 to n-1.')
@@ -41,6 +43,18 @@ def main(_):
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
   
+  # Initialise model update tracking:
+  if not cfg.track_model_update:
+    probe_inputs = None
+    init_logits = None
+  else:   # TODO refactoring...
+    probe_batch = next(iter(trainloader))
+    probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
+    model.eval()
+    with engine.ctx, torch.no_grad():
+      init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs))
+    init_logits = init_logits.detach()
+
   # Training
   print_master("=== Start Training! ===")
   metrics = defaultdict(list)
@@ -64,7 +78,7 @@ def main(_):
     # Log
     if step % cfg.log_every_steps == 0:
       if master_process:
-        utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model)
+        utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, probe_inputs=probe_inputs, ctx=engine.ctx)
       train_losses = []
     
     # Checkpoint

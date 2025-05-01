@@ -5,6 +5,7 @@ import math
 import shutil
 import wandb
 import torch
+import torch.nn.functional as F
 
 from itertools import product
 from collections import namedtuple
@@ -86,15 +87,42 @@ def compute_grad_norms(model):
       continue
     else:
       with torch.no_grad():
-        grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm().item()
-
-  if grad_norms == {}:
-      print("Warning: Attempted to fetch gradient norms, but the requested parameter was name not found or the gradient is None.")
-
+        grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm(p=2).item()
   return grad_norms
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None):
+def compute_model_update_l2(model, init_logits, probe_inputs, ctx):
+  """Computes the model update according to the DeepNet paper.
+  The token outputs are flattened and directly subtracted.
+
+  Returns:
+      dict: A ditionary with one key that maps to ||F(x, theta) - F(x, theta_0)||_2
+  """
+  model.eval()
+  with ctx, torch.no_grad():
+    new_logits = getattr(model(probe_inputs), 'logits', model(probe_inputs))
+  update_norm = (new_logits - init_logits).flatten().norm(p=2).item()
+  return {"model_update/l2-cumulative": update_norm}
+
+
+def compute_model_update_cosine(model, init_logits, probe_inputs, ctx):
+  """Computes the model update inspired by the DeepNet paper, but uses cosine distance rather than l2 distance.
+  The cosine similarity is computed token-wise and we retrieve the mean.
+
+  Returns:
+      dict: A ditionary with one key that maps to 1 - cos_sim(F(x, theta), F(x, theta_0))
+  """
+  model.eval()
+  with ctx, torch.no_grad():
+    new_logits = getattr(model(probe_inputs), 'logits', model(probe_inputs))
+    a = init_logits.view(-1, init_logits.size(-1))  # Flatten to (B*L, D)
+    b = new_logits.view(-1, new_logits.size(-1))  # Flatten to (B*L, D)
+  cos_sim = F.cosine_similarity(a, b, dim=1).mean().item()
+  cos_dist = 1.0 - cos_sim
+  return {"model_update/cosine-cumulative": cos_dist}
+
+
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
   # NOTE: valid_loss is a float, already reduced across GPUs
@@ -114,10 +142,17 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     new_metrics["valid/loss"] = valid_loss
     new_metrics["valid/ppl"] = math.exp(valid_loss)
   
-  # Add gradient norms if model is provided
-  if model is not None:
+  # Add gradient norms if requested
+  if cfg.track_grad_norm is True:
     grad_norms = compute_grad_norms(model)
     new_metrics.update(grad_norms)
+
+  # Add model update metrics if requested
+  if cfg.track_model_update:
+    mu_l2 = compute_model_update_l2(model, init_logits, probe_inputs, ctx)
+    mu_cos = compute_model_update_cosine(model, init_logits, probe_inputs, ctx)
+    new_metrics.update(mu_l2)
+    new_metrics.update(mu_cos)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
