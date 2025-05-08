@@ -143,7 +143,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     new_metrics["valid/ppl"] = math.exp(valid_loss)
   
   # Add gradient norms if requested
-  if cfg.track_grad_norm is True:
+  if cfg.track_grad_norm:
     grad_norms = compute_grad_norms(model)
     new_metrics.update(grad_norms)
 

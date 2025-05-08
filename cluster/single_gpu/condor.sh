@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export HOME=/home/ltrochelmann
+export TMPDIR=/fast/ltrochelmann/tmp
 
 echo "Activating environment"
 source /home/ltrochelmann/miniforge3/etc/profile.d/conda.sh
