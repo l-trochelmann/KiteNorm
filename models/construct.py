@@ -19,7 +19,10 @@ def construct_model(cfg):
       mlp = cfg.mlp_class,
       seq_len = cfg.seq_len,
       tie_embeddings = cfg.tie_embeddings,
-      ln_config = cfg.ln_config
+      ln_config = cfg.ln_config,
+      ln_style = cfg.ln_style,
+      ln_use_shift = cfg.ln_use_shift,
+      dyt_alpha_init = cfg.dyt_alpha_init
     )
     model = Transformer(model_cfg)
     

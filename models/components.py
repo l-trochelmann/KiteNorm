@@ -14,6 +14,36 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-6)
 
 
+class LayerNorm_Simple(nn.Module):
+    """Drops both LN parameters as suggested by Xu et al (2019)"""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.normalized_shape = torch.Size([dim])
+
+    def forward(self, input):
+        return F.layer_norm(input, self.normalized_shape, None, None, 1e-6)
+
+
+class DyT(nn.Module):
+    """Dynamic Tangent rescaling as proposed by Zhu et al (2025)"""
+    def __init__(self, dim: int, alpha_init_value: float, bias: bool = False):
+        super().__init__()
+        self.normalized_shape = torch.Size([dim])
+        self.alpha_init_value = alpha_init_value
+
+        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
+        self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(self.normalized_shape)) if bias else None
+    
+    def forward(self, x):
+        x = torch.tanh(self.alpha * x)
+        if self.bias is None:
+            x = x * self.weight
+        else:
+            x = x * self.weight + self.bias
+        return x
+
+
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()

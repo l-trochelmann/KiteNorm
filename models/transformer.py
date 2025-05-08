@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import RMSNorm, MLP, GLU, MLPReluSquared
+from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -19,6 +19,9 @@ class ModelConfig:
     n_layers: int
     n_heads: int
     ln_config: str
+    ln_style: str
+    ln_use_shift: bool = False
+    dyt_alpha_init: float = 0.5
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
@@ -30,6 +33,19 @@ MLP_CLASSES = {
     "glu": GLU,
     "mlp_relu_sq": MLPReluSquared
 }
+
+
+def _get_ln_variant(cfg):
+    if cfg.ln_style == 'LayerNorm':
+        return LayerNorm(cfg.dim, bias=cfg.ln_use_shift)
+    elif cfg.ln_style == 'LayerNorm_Simple':
+        return LayerNorm_Simple(cfg.dim)
+    elif cfg.ln_style == 'DyT':
+        return DyT(cfg.dim, alpha_init_value=cfg.dyt_alpha_init, bias=cfg.ln_use_shift)
+    elif cfg.ln_style == 'RMSNorm':
+        return RMSNorm(cfg.dim, cfg.rmsorm_eps)
+    else:
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm'")
 
 
 class Attention(nn.Module):
@@ -67,9 +83,9 @@ class Block_LN(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = Attention(cfg)
-        self.attn_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        self.attn_norm = _get_ln_variant(cfg)
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        self.mlp_norm = _get_ln_variant(cfg)
         self.layer_id = layer_id
 
 
@@ -115,14 +131,14 @@ class Transformer(nn.Module):
         self.ln_config = cfg.ln_config
         if cfg.ln_config == 'pre-LN':  # Use pre-LN blocks and out_norm
             self.layers = nn.ModuleList([Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+            self.out_norm = _get_ln_variant(cfg)
         elif cfg.ln_config == 'post-LN':  # Use post-LN blocks
             self.layers = nn.ModuleList([Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'mix-LN':  # Use partly post-LN and partly pre-LN based on a ratio parameter, followed by out_norm. Post-LN first.
             self.layers = nn.ModuleList([Block_PostLN(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
                 else Block_PreLN(idx, cfg)
                 for idx in range(cfg.n_layers)])
-            self.out_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+            self.out_norm = _get_ln_variant(cfg)
         elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
             self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
         else:
