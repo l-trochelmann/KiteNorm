@@ -18,9 +18,11 @@ class ModelConfig:
     expand: float
     n_layers: int
     n_heads: int
+    ln_config: str
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
+    mixLN_ratio: float = 0.25  # TODO: Add to training config
 
 
 MLP_CLASSES = {
@@ -60,7 +62,8 @@ class Attention(nn.Module):
         
         return self.w_out(out)
 
-class Block(nn.Module):
+
+class Block_LN(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = Attention(cfg)
@@ -68,12 +71,39 @@ class Block(nn.Module):
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.mlp_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
         self.layer_id = layer_id
-    
+
+
+class Block_ReZero(nn.Module):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = Attention(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.attn_resweight = nn.Parameter(torch.Tensor([0]))
+        self.mlp_resweight = nn.Parameter(torch.Tensor([0]))
+        self.layer_id = layer_id
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = x + self.attn_resweight * self.attn(x, freqs_cis)
+        x = x + self.mlp_resweight * self.mlp(x)
+        return x    
+
+
+class Block_PreLN(Block_LN):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         x = x + self.attn(self.attn_norm(x), freqs_cis)
         x = x + self.mlp(self.mlp_norm(x))
         return x
+    
+
+class Block_PostLN(Block_LN):
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = self.attn_norm(x + self.attn(x, freqs_cis))
+        x = self.mlp_norm(x + self.mlp(x))
+        return x
+
 
 class Transformer(nn.Module):
     def __init__(self, cfg):
@@ -82,8 +112,21 @@ class Transformer(nn.Module):
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
-        self.layers = nn.ModuleList([Block(idx, cfg) for idx in range(cfg.n_layers)])
-        self.out_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        self.ln_config = cfg.ln_config
+        if cfg.ln_config == 'pre-LN':  # Use pre-LN blocks and out_norm
+            self.layers = nn.ModuleList([Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+            self.out_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        elif cfg.ln_config == 'post-LN':  # Use post-LN blocks
+            self.layers = nn.ModuleList([Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'mix-LN':  # Use partly post-LN and partly pre-LN based on a ratio parameter, followed by out_norm. Post-LN first.
+            self.layers = nn.ModuleList([Block_PostLN(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
+                else Block_PreLN(idx, cfg)
+                for idx in range(cfg.n_layers)])
+            self.out_norm = RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
+            self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
+        else:
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -101,7 +144,9 @@ class Transformer(nn.Module):
         self.freqs_cis = self.freqs_cis.to(x.device)
         for layer in self.layers:
             x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
-        return self.lm_head(self.out_norm(x)) # (bsz, seqlen, vocab_size)
+        if self.ln_config == 'pre-LN':  # Only use out_norm in the pre-LN case
+            x = self.out_norm(x)
+        return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -128,4 +173,3 @@ class Transformer(nn.Module):
             if not self.lm_head.weight is self.embed_tokens.weight:  # if no weight tying
                 n_params -= self.lm_head.weight.numel()
         return n_params
-

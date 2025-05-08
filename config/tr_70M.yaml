@@ -24,6 +24,7 @@ n_heads: 8
 mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
+ln_config: 'pre-LN'  # Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero'
 
 # note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
 steps_budget: 5340  # Choose 70M*20=1.4B tokens by chinchilla scaling law -> Obtain step size as 1.4B/(2048*32*4) = 5340.576...
@@ -60,8 +61,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_test-mu-tracking'
-exp_name: 'tr_70M_sp_test-mu-tracking'
+wandb_run_name: 'tr_70M_sp_test-'
+exp_name: 'tr_70M_sp_test-'
 check_existing_wandb_run: False
 track_model_update: True
 track_grad_norm: True
@@ -71,7 +72,7 @@ resume_step: null
 resume_exp_name: null
 
 out_dir: '/fast/ltrochelmann/exp/tests'
-save_last_checkpoint: False
+save_last_checkpoint: True
 save_intermediate_checkpoints: False
 save_every_steps: null
 

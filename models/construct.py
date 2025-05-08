@@ -18,10 +18,11 @@ def construct_model(cfg):
       rmsorm_eps = 1e-6,
       mlp = cfg.mlp_class,
       seq_len = cfg.seq_len,
-      tie_embeddings = cfg.tie_embeddings
+      tie_embeddings = cfg.tie_embeddings,
+      ln_config = cfg.ln_config
     )
     model = Transformer(model_cfg)
-
+    
   # Pythia
   elif cfg.model.startswith("pythia"):
     from transformers import AutoConfig, AutoModelForCausalLM
