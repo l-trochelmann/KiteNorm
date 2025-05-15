@@ -28,6 +28,7 @@ ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero'
 ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm'
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
 dyt_alpha_init: 0.5  # initialisation value for DyT scalars
+mixLN_ratio: 0.25  # Post-LN ratio when using mix-LN
 
 # note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
 steps_budget: 5340  # Choose 70M*20=1.4B tokens by chinchilla scaling law -> Obtain step size as 1.4B/(2048*32*4) = 5340.576...
@@ -50,9 +51,9 @@ beta2: 0.95
 grad_clip: 1.0
 eps: 1.e-8
 
-scheduler: 'warmup_cosine'
+scheduler: 'wsd'
 warmup_steps: 320
-cooldown_steps: null
+cooldown_steps: 0.15
 lr_start: 1.e-10
 lr_end: 0.0
 lr_end_pct: null

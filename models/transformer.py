@@ -25,7 +25,7 @@ class ModelConfig:
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
-    mixLN_ratio: float = 0.25  # TODO: Add to training config
+    mixLN_ratio: float = 0.25
 
 
 MLP_CLASSES = {
