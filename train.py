@@ -54,6 +54,11 @@ def main(_):
     with engine.ctx, torch.no_grad():
       init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs))
     init_logits = init_logits.detach()
+  if not cfg.track_param_update:
+    init_params = None
+  else:
+    init_params = {n: p.detach().clone() for n, p in model.named_parameters()}
+
 
   # Training
   print_master("=== Start Training! ===")
@@ -78,7 +83,8 @@ def main(_):
     # Log
     if step % cfg.log_every_steps == 0:
       if master_process:
-        utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, probe_inputs=probe_inputs, ctx=engine.ctx)
+        utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
+                  probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
       train_losses = []
     
     # Checkpoint

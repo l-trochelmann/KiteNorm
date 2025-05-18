@@ -1,4 +1,3 @@
-
 import os
 import yaml
 import math
@@ -85,9 +84,8 @@ def compute_grad_norms(model):
   for name, param in model.named_parameters():
     if param.grad is None or not name.endswith("mlp.fc2.weight"):
       continue
-    else:
-      with torch.no_grad():
-        grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm(p=2).item()
+    with torch.no_grad():
+      grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm(p=2).item()
   return grad_norms
 
 
@@ -122,7 +120,42 @@ def compute_model_update_cosine(model, init_logits, probe_inputs, ctx):
   return {"model_update/cosine-cumulative": cos_dist}
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None):
+def compute_param_update_l2(model, init_params):
+  """Computes gradient l2 norms for the last layer of each MLP.
+    
+  Returns:
+      dict: A dictionary mapping layer names to their cumulative l2 parameter update
+  """
+  l2_updates = {}
+  with torch.no_grad():
+    for name, param in model.named_parameters():
+      if not name.endswith("mlp.fc2.weight"):
+        continue
+      diff_norm = (param.data - init_params[name]).norm(p=2).item()
+      l2_updates[f"param_update_l2-cumulative/{name}"] = diff_norm
+  return l2_updates
+
+
+def compute_param_update_cos(model, init_params):
+  """Computes gradient l2 norms for the last layer of each MLP.
+    
+  Returns:
+      dict: A dictionary mapping layer names to their cumulative cosine parameter update
+  """
+  cos_updates = {}
+  with torch.no_grad():
+    for name, param in model.named_parameters():
+      if not name.endswith("mlp.fc2.weight"):
+          continue
+      a = init_params[name].flatten()
+      b = param.data.flatten()
+      # F.cosine_similarity expects tensors with an explicit dim
+      cos_sim = F.cosine_similarity(a, b, dim=0).item()
+      cos_updates[f"param_update_cosine-cumulative/{name}"] = 1.0 - cos_sim
+  return cos_updates
+
+
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
   # NOTE: valid_loss is a float, already reduced across GPUs
@@ -153,6 +186,12 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     mu_cos = compute_model_update_cosine(model, init_logits, probe_inputs, ctx)
     new_metrics.update(mu_l2)
     new_metrics.update(mu_cos)
+
+  if cfg.track_param_update:
+    pu_l2 = compute_param_update_l2(model, init_params)
+    pu_cos = compute_param_update_cos(model, init_params)
+    new_metrics.update(pu_l2)
+    new_metrics.update(pu_cos)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
