@@ -155,6 +155,19 @@ def compute_param_update_cos(model, init_params):
   return cos_updates
 
 
+def get_softmax_entropy(model):
+  """Retrieves mean entropy of the softmax activations over the validation set for each layer."""
+  softmax_entropies = {}
+  model.eval()
+  for layer in model.layers:
+    layer_softmax_entropy = layer.attn.entropy_sum / layer.attn.entropy_count
+    softmax_entropies[f"softmax_entropy/{layer.layer_id}"] = layer_softmax_entropy.item()
+
+    layer.attn.entropy_sum.zero_()  # Reset running average before the next val pass
+    layer.attn.entropy_count.zero_()  # Reset running average before the next val pass
+  
+  return softmax_entropies
+
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
@@ -187,11 +200,16 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     new_metrics.update(mu_l2)
     new_metrics.update(mu_cos)
 
+  # Add param update metrics if requested
   if cfg.track_param_update:
     pu_l2 = compute_param_update_l2(model, init_params)
     pu_cos = compute_param_update_cos(model, init_params)
     new_metrics.update(pu_l2)
     new_metrics.update(pu_cos)
+
+  # Add softmax entropy metrics if requested, only following a validation pass
+  if cfg.track_softmax and valid_loss is not None:
+    new_metrics.update(get_softmax_entropy(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)

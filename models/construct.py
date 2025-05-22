@@ -23,7 +23,9 @@ def construct_model(cfg):
       ln_style = cfg.ln_style,
       ln_use_shift = cfg.ln_use_shift,
       dyt_alpha_init = cfg.dyt_alpha_init,
-      mixLN_ratio = cfg.mixLN_ratio
+      mixLN_ratio = cfg.mixLN_ratio,
+      use_qknorm = cfg.use_qknorm,
+      qknorm_L97 = cfg.qknorm_L97
     )
     model = Transformer(model_cfg)
     
