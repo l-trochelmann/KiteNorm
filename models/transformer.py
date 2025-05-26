@@ -159,9 +159,9 @@ class QKNormAttention(Attention):
         v = v.transpose(1, 2)
 
         if self.training:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True) # (bsz, nh, seqlen, h_dim)
+            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
         else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
             self.entropy_sum.add_(sum_ent.detach())
             self.entropy_count.add_(n)
         
