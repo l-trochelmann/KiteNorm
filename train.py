@@ -97,7 +97,6 @@ def main(_):
   if master_process and cfg.save_last_checkpoint:
     save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 
-  print_master(f"=== Checkpoint saved! ===")
   print_master(f"=== Terminating... ===")
 
   # DDP slaughtering
