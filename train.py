@@ -52,12 +52,12 @@ def main(_):
     probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
     model.eval()
     with engine.ctx, torch.no_grad():
-      init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs))
+      init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs)).cpu()
     init_logits = init_logits.detach()
   if not cfg.track_param_update:
     init_params = None
   else:
-    init_params = {n: p.detach().clone() for n, p in model.named_parameters()}
+    init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
 
 
   # Training
@@ -78,15 +78,22 @@ def main(_):
     valid_loss = None
     if cfg.eval and step % cfg.eval_every_steps == 0:
       print_master("Evaluating on validation set")
-      valid_loss = engine.eval(validloader)
-    
+      if cfg.track_softmax:
+        for layer in model.layers:
+          layer.attn.track_entropy = True
+        valid_loss = engine.eval(validloader)
+        for layer in model.layers:
+          layer.attn.track_entropy = False
+      else:
+        valid_loss = engine.eval(validloader)
+
     # Log
     if step % cfg.log_every_steps == 0:
       if master_process:
         utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
                   probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
       train_losses = []
-    
+
     # Checkpoint
     if master_process and cfg.save_intermediate_checkpoints \
         and micro_step % cfg.save_every_steps == 0:

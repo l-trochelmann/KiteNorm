@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared
+from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -20,8 +20,8 @@ class ModelConfig:
     n_heads: int
     ln_config: str
     ln_style: str
+    attn_style: str
     ln_use_shift: bool = False
-    use_qknorm: bool = False
     dyt_alpha_init: float = 0.5
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
@@ -37,24 +37,34 @@ MLP_CLASSES = {
 }
 
 
-def _get_ln_variant(cfg):
+def _get_ln_variant(cfg, dim=None):
+    if dim==None:
+        dim = cfg.dim
+
     if cfg.ln_style == 'LayerNorm':
-        return LayerNorm(cfg.dim, bias=cfg.ln_use_shift)
+        return LayerNorm(dim, bias=cfg.ln_use_shift)
     elif cfg.ln_style == 'LayerNorm_Simple':
-        return LayerNorm_Simple(cfg.dim)
+        return LayerNorm_Simple(dim)
     elif cfg.ln_style == 'DyT':
-        return DyT(cfg.dim, alpha_init_value=cfg.dyt_alpha_init, bias=cfg.ln_use_shift)
+        return DyT(dim, alpha_init_value=cfg.dyt_alpha_init, bias=cfg.ln_use_shift)
     elif cfg.ln_style == 'RMSNorm':
-        return RMSNorm(cfg.dim, cfg.rmsorm_eps)
+        return RMSNorm(dim, cfg.rmsorm_eps)
+    elif cfg.ln_style == 'GainOnly':
+        return GainOnly(dim, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly'")
 
 
 def _get_attn(cfg):
-    if cfg.use_qknorm:
-        return QKNormAttention(cfg)
-    else:
+    if cfg.attn_style == 'Default':
         return Attention(cfg)
+    elif cfg.attn_style == 'QKNorm':
+        return QKNormAttention(cfg)
+    elif cfg.attn_style == 'QK-LN':
+        return QKLNAttention(cfg)
+    else:
+        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN'")
+        
 
 
 def _scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
@@ -101,6 +111,7 @@ class Attention(nn.Module):
         self.w_qkv = nn.Linear(cfg.dim, 3*cfg.dim, bias=False)
         self.w_out = nn.Linear(cfg.dim, cfg.dim, bias=False)
 
+        self.track_entropy = False  # While True, all forwards will contribute to a running average of softmax entropy
         self.register_buffer("entropy_sum", torch.zeros(1))
         self.register_buffer("entropy_count", torch.zeros(1))
     
@@ -118,7 +129,7 @@ class Attention(nn.Module):
         k = k.transpose(1, 2) # (bsz, nh, seqlen, h_dim)
         v = v.transpose(1, 2) # (bsz, nh, seqlen, h_dim)
 
-        if self.training:
+        if not self.track_entropy:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True) # (bsz, nh, seqlen, h_dim)
         else:
             out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)
@@ -158,7 +169,49 @@ class QKNormAttention(Attention):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        if self.training:
+        if not self.track_entropy:
+            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
+        else:
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
+            self.entropy_sum.add_(sum_ent.detach())
+            self.entropy_count.add_(n)
+        
+        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
+
+        return self.w_out(out)
+    
+
+class QKLNAttention(Attention):
+    """QKNorm Attention, but using an LN variant instead of l2 norm on the keys and queries, and different scaling initialisation"""
+    def __init__(self, cfg: ModelConfig):
+        super().__init__(cfg)
+
+        g0 = 1/math.sqrt(self.head_dim)  # Initialise temperature
+        self.g = nn.Parameter(torch.tensor(g0))
+
+        self.qk_norm = _get_ln_variant(cfg, dim=self.head_dim)  # LN across the head dimension
+
+
+    def forward(self, x, freqs_cis):
+        bsz, seqlen, d = x.shape
+        
+        q, k, v = self.w_qkv(x).split(d, dim=2)
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
+        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
+        
+        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
+
+        q = self.qk_norm(q)  # LN instead of l2 norm
+        k = self.qk_norm(k)  # LN instead of l2 norm
+
+        q = q * self.g  # Apply temperature. Note that (q*g)k^T =  g*(qk^T)
+        
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        if not self.track_entropy:
             out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
         else:
             out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling

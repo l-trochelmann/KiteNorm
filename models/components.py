@@ -24,6 +24,20 @@ class LayerNorm_Simple(nn.Module):
         return F.layer_norm(input, self.normalized_shape, None, None, 1e-6)
 
 
+class GainOnly(nn.Module):
+    """Ablation: LN gain without normalisation"""
+    def __init__(self, dim: int, bias: bool = False):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+
+    def forward(self, input):
+        output = input * self.weight
+        if self.bias is not None:
+            output = output + self.bias
+        return output
+
+
 class DyT(nn.Module):
     """Dynamic Tangent rescaling as proposed by Zhu et al (2025)"""
     def __init__(self, dim: int, alpha_init_value: float, bias: bool = False):

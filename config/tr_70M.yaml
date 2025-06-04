@@ -26,9 +26,9 @@ tie_embeddings: False
 torch_compile: True
 
 ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None'
-ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm'
+ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly'
+attn_style: "Default"  # choose from 'Default', 'QKNorm', 'QK-LN'"
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
-use_qknorm: False  # whether or not to use QKNorm attention
 dyt_alpha_init: 0.5  # initialisation value for DyT scalars
 mixLN_ratio: 0.25  # post-LN ratio when using mix-LN
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init
@@ -75,6 +75,8 @@ track_model_update: True
 track_grad_norm: True
 track_param_update: True
 track_softmax: True
+track_ln_weights: True
+track_block_grad_similarity: True
 
 resume: False
 resume_step: null

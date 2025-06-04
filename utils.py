@@ -4,6 +4,7 @@ import math
 import shutil
 import wandb
 import torch
+import re
 import torch.nn.functional as F
 
 from itertools import product
@@ -75,14 +76,14 @@ def maybe_make_dir(cfg, job_idx=None):
 
 
 def compute_grad_norms(model):
-  """Computes gradient l2 norms for the last layer of each MLP.
+  """Computes gradient l2 norms for all parameters.
     
   Returns:
-      dict: A dictionary mapping layer names to their gradient norms
+      dict: A dictionary mapping parameter names to their gradient norms
   """
   grad_norms = {}
   for name, param in model.named_parameters():
-    if param.grad is None or not name.endswith("mlp.fc2.weight"):
+    if param.grad is None:
       continue
     with torch.no_grad():
       grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm(p=2).item()
@@ -97,9 +98,18 @@ def compute_model_update_l2(model, init_logits, probe_inputs, ctx):
       dict: A ditionary with one key that maps to ||F(x, theta) - F(x, theta_0)||_2
   """
   model.eval()
+  device = next(model.parameters()).device
+  init_logits_gpu  = init_logits.to(device, non_blocking=True)
+  probe_inputs_gpu = probe_inputs.to(device, non_blocking=True)
+
   with ctx, torch.no_grad():
-    new_logits = getattr(model(probe_inputs), 'logits', model(probe_inputs))
-  update_norm = (new_logits - init_logits).flatten().norm(p=2).item()
+    new_logits = getattr(model(probe_inputs_gpu), 'logits', model(probe_inputs_gpu))
+
+  update_norm = (new_logits - init_logits_gpu).flatten().norm(p=2).item()
+
+  del new_logits, init_logits_gpu, probe_inputs_gpu
+  torch.cuda.empty_cache()
+
   return {"model_update/l2-cumulative": update_norm}
 
 
@@ -111,12 +121,20 @@ def compute_model_update_cosine(model, init_logits, probe_inputs, ctx):
       dict: A ditionary with one key that maps to 1 - cos_sim(F(x, theta), F(x, theta_0))
   """
   model.eval()
+  device = next(model.parameters()).device
+  init_logits_gpu  = init_logits.to(device, non_blocking=True)
+  probe_inputs_gpu = probe_inputs.to(device, non_blocking=True)
+
   with ctx, torch.no_grad():
-    new_logits = getattr(model(probe_inputs), 'logits', model(probe_inputs))
-    a = init_logits.view(-1, init_logits.size(-1))  # Flatten to (B*L, D)
+    new_logits = getattr(model(probe_inputs_gpu), 'logits', model(probe_inputs_gpu))
+    a = init_logits_gpu.view(-1, init_logits_gpu.size(-1))  # Flatten to (B*L, D)
     b = new_logits.view(-1, new_logits.size(-1))  # Flatten to (B*L, D)
   cos_sim = F.cosine_similarity(a, b, dim=1).mean().item()
   cos_dist = 1.0 - cos_sim
+
+  del new_logits, init_logits_gpu, probe_inputs_gpu
+  torch.cuda.empty_cache()
+
   return {"model_update/cosine-cumulative": cos_dist}
 
 
@@ -127,31 +145,49 @@ def compute_param_update_l2(model, init_params):
       dict: A dictionary mapping layer names to their cumulative l2 parameter update
   """
   l2_updates = {}
+
+  device = next(model.parameters()).device
+  for name, tensor in init_params.items():
+    init_params[name] = tensor.to(device, non_blocking=True)
+
   with torch.no_grad():
     for name, param in model.named_parameters():
-      if not name.endswith("mlp.fc2.weight"):
-        continue
-      diff_norm = (param.data - init_params[name]).norm(p=2).item()
+      cur = param.detach()
+      diff_norm = (cur - init_params[name]).norm(p=2).item()
       l2_updates[f"param_update_l2-cumulative/{name}"] = diff_norm
+  
+  for name, tensor in init_params.items():
+    init_params[name] = tensor.cpu()
+  torch.cuda.empty_cache()
+
   return l2_updates
 
 
-def compute_param_update_cos(model, init_params):
+def compute_param_update_cosine(model, init_params):
   """Computes gradient l2 norms for the last layer of each MLP.
     
   Returns:
       dict: A dictionary mapping layer names to their cumulative cosine parameter update
   """
   cos_updates = {}
+
+  device = next(model.parameters()).device
+  for name, tensor in init_params.items():
+    init_params[name] = tensor.to(device, non_blocking=True)
+
   with torch.no_grad():
     for name, param in model.named_parameters():
-      if not name.endswith("mlp.fc2.weight"):
-          continue
+      cur = param.detach()
       a = init_params[name].flatten()
-      b = param.data.flatten()
+      b = cur.flatten()
       # F.cosine_similarity expects tensors with an explicit dim
       cos_sim = F.cosine_similarity(a, b, dim=0).item()
       cos_updates[f"param_update_cosine-cumulative/{name}"] = 1.0 - cos_sim
+  
+  for name, tensor in init_params.items():
+    init_params[name] = tensor.cpu()
+  torch.cuda.empty_cache()
+
   return cos_updates
 
 
@@ -167,6 +203,48 @@ def get_softmax_entropy(model):
     layer.attn.entropy_count.zero_()  # Reset running average before the next val pass
   
   return softmax_entropies
+
+
+def get_ln_param_stats(model):
+  ln_param_stats = {}
+  with torch.no_grad():
+    for name, param in model.named_parameters():
+      if "norm.weight" in name:
+        ln_param_stats[f"LN_gain_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"LN_gain_std/{name}"] = param.data.std().item()
+      elif "norm.bias" in name:
+        ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
+      elif "norm.alpha" in name:
+        ln_param_stats[f"DyT_alpha_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"DyT_alpha_std/{name}"] = param.data.std().item()
+      elif "attn.g" in name:
+        ln_param_stats[f"QKNorm_g_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"QKNorm_g_std/{name}"] = param.data.std().item()
+
+  return ln_param_stats
+
+
+def get_block_grad_similarity(model):
+  block_grad_similarity = {}
+
+  fc2 = []
+  for name, param in model.named_parameters():
+    if name.endswith("mlp.fc2.weight"):
+      idx = int(re.search(r"layers\.(\d+)\.", name).group(1))  # grab the number N in “layers.N.”
+      fc2.append((idx, name, param))
+
+  fc2.sort(key=lambda x: x[0])                 # [(0,…), (1,…), …, (5,…)]
+  neighbours = zip(fc2[::-1][:-1], fc2[::-1][1:])   # (5↔4), (4↔3), …, (1↔0)
+  for (idx_hi, name_hi, p_hi), (idx_lo, name_lo, p_lo) in neighbours:
+    with torch.no_grad():
+      if p_hi.grad is None or p_lo.grad is None:
+          continue
+      sim = F.cosine_similarity(p_hi.grad.flatten(), p_lo.grad.flatten(), dim=0)
+      block_grad_similarity[f"block_grad_similarity/{idx_hi}->{idx_lo}"] = sim.item()
+
+  return block_grad_similarity
+
 
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
@@ -203,13 +281,20 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   # Add param update metrics if requested
   if cfg.track_param_update:
     pu_l2 = compute_param_update_l2(model, init_params)
-    pu_cos = compute_param_update_cos(model, init_params)
+    pu_cos = compute_param_update_cosine(model, init_params)
     new_metrics.update(pu_l2)
     new_metrics.update(pu_cos)
 
   # Add softmax entropy metrics if requested, only following a validation pass
   if cfg.track_softmax and valid_loss is not None:
     new_metrics.update(get_softmax_entropy(model))
+
+  # Add LN weights metrics if requested
+  if cfg.track_ln_weights:
+    new_metrics.update(get_ln_param_stats(model))
+  
+  if cfg.track_block_grad_similarity:
+    new_metrics.update(get_block_grad_similarity(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
