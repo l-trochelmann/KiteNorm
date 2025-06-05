@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly
+from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly, DetachNorm
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -51,8 +51,10 @@ def _get_ln_variant(cfg, dim=None):
         return RMSNorm(dim, cfg.rmsorm_eps)
     elif cfg.ln_style == 'GainOnly':
         return GainOnly(dim, bias=cfg.ln_use_shift)
+    elif cfg.ln_style == 'DetachNorm':
+        return DetachNorm(dim, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm'")
 
 
 def _get_attn(cfg):
