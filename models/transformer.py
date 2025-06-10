@@ -64,8 +64,10 @@ def _get_attn(cfg):
         return QKNormAttention(cfg)
     elif cfg.attn_style == 'QK-LN':
         return QKLNAttention(cfg)
+    elif cfg.attn_style == 'QK-RMSNorm':
+        return QKRMSNormAttention(cfg)
     else:
-        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN'")
+        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'")
         
 
 
@@ -203,6 +205,42 @@ class QKLNAttention(Attention):
 
         q = self.qk_norm(q)  # LN instead of l2 norm
         k = self.qk_norm(k)  # LN instead of l2 norm
+        
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        if not self.track_entropy:
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # default 1/sqrt(d) scale, no temperature
+        else:
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)   # default 1/sqrt(d) scale, no temperature
+            self.entropy_sum.add_(sum_ent.detach())
+            self.entropy_count.add_(n)
+        
+        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
+
+        return self.w_out(out)
+
+class QKRMSNormAttention(Attention):
+    """QKNorm Attention, but using RMSNorm on the queries and keys, and no scalar temperature"""
+    def __init__(self, cfg: ModelConfig):
+        super().__init__(cfg)
+
+        self.qk_norm = RMSNorm(dim=self.head_dim)  # RMSNorm across the head dimension
+
+
+    def forward(self, x, freqs_cis):
+        bsz, seqlen, d = x.shape
+        
+        q, k, v = self.w_qkv(x).split(d, dim=2)
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
+        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
+        
+        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
+
+        q = self.qk_norm(q)  # RMSNorm instead of l2 norm
+        k = self.qk_norm(k)  # RMSNorm instead of l2 norm
         
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
