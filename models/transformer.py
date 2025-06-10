@@ -184,14 +184,11 @@ class QKNormAttention(Attention):
     
 
 class QKLNAttention(Attention):
-    """QKNorm Attention, but using an LN variant instead of l2 norm on the keys and queries, and different scaling initialisation"""
+    """QKNorm Attention, but using LN on the queries and keys, and no scalar temperature"""
     def __init__(self, cfg: ModelConfig):
         super().__init__(cfg)
 
-        g0 = 1/math.sqrt(self.head_dim)  # Initialise temperature
-        self.g = nn.Parameter(torch.tensor(g0))
-
-        self.qk_norm = _get_ln_variant(cfg, dim=self.head_dim)  # LN across the head dimension
+        self.qk_norm = LayerNorm(dim=self.head_dim, bias=cfg.ln_use_shift)  # LN across the head dimension
 
 
     def forward(self, x, freqs_cis):
@@ -206,17 +203,15 @@ class QKLNAttention(Attention):
 
         q = self.qk_norm(q)  # LN instead of l2 norm
         k = self.qk_norm(k)  # LN instead of l2 norm
-
-        q = q * self.g  # Apply temperature. Note that (q*g)k^T =  g*(qk^T)
         
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
         if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # default 1/sqrt(d) scale, no temperature
         else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)   # default 1/sqrt(d) scale, no temperature
             self.entropy_sum.add_(sum_ent.detach())
             self.entropy_count.add_(n)
         
