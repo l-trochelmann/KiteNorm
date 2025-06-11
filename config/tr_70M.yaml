@@ -26,8 +26,8 @@ tie_embeddings: False
 torch_compile: True
 
 ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None'
-ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly'
-attn_style: "Default"  # choose from 'Default', 'QKNorm', 'QK-LN'"
+ln_style: 'RMSNorm_Simple'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
+attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
 dyt_alpha_init: 0.5  # initialisation value for DyT scalars
 mixLN_ratio: 0.25  # post-LN ratio when using mix-LN
@@ -49,7 +49,7 @@ optim: 'adamw'
 fused_optim: True
 lr: [1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
 weight_decay: 0.1
-beta1: 0.9
+beta1: 0.95  # do tied grid search on 0.9, 0.95, 0.975
 beta2: 0.95
 grad_clip: 1.0
 eps: 1.e-8
@@ -68,21 +68,21 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_test-'
-exp_name: 'tr_70M_sp_test-'
+wandb_run_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple'
+exp_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple'
 check_existing_wandb_run: False
 track_model_update: True
 track_grad_norm: True
 track_param_update: True
 track_softmax: True
 track_ln_weights: True
-track_block_grad_similarity: True
+track_block_grad_similarity: False
 
 resume: False
 resume_step: null
 resume_exp_name: null
 
-out_dir: '/fast/ltrochelmann/exp/tests'
+out_dir: '/fast/ltrochelmann/exp/main'
 save_last_checkpoint: True
 save_intermediate_checkpoints: False
 save_every_steps: null

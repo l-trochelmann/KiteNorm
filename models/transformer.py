@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly, DetachNorm
+from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly, DetachNorm, RMSNorm_Simple
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -49,12 +49,14 @@ def _get_ln_variant(cfg, dim=None):
         return DyT(dim, alpha_init_value=cfg.dyt_alpha_init, bias=cfg.ln_use_shift)
     elif cfg.ln_style == 'RMSNorm':
         return RMSNorm(dim, cfg.rmsorm_eps)
+    elif cfg.ln_style == 'RMSNorm_Simple':
+        return RMSNorm_Simple(dim, cfg.rmsorm_eps)
     elif cfg.ln_style == 'GainOnly':
         return GainOnly(dim, bias=cfg.ln_use_shift)
     elif cfg.ln_style == 'DetachNorm':
         return DetachNorm(dim, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'")
 
 
 def _get_attn(cfg):
@@ -211,9 +213,9 @@ class QKLNAttention(Attention):
         v = v.transpose(1, 2)
 
         if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # default 1/sqrt(d) scale, no temperature
+            out = F.scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)  # use fixed 1/d scale, no temperature
         else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)   # default 1/sqrt(d) scale, no temperature
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)   # use fixed 1/d scale, no temperature
             self.entropy_sum.add_(sum_ent.detach())
             self.entropy_count.add_(n)
         
@@ -228,6 +230,10 @@ class QKRMSNormAttention(Attention):
 
         self.qk_norm = RMSNorm(dim=self.head_dim)  # RMSNorm across the head dimension
 
+        g0 = math.log2(cfg.qknorm_L97 * cfg.qknorm_L97 - cfg.qknorm_L97)  # ABLATION: QKRMSNorm with QKNorm temperature init
+        g0 = math.sqrt(g0)  # Note a*(u dot v) = (sqrt(a)*u) dot (sqrt(a)*v)
+        with torch.no_grad():
+            self.qk_norm.weight.data.mul_(g0)
 
     def forward(self, x, freqs_cis):
         bsz, seqlen, d = x.shape
@@ -247,9 +253,9 @@ class QKRMSNormAttention(Attention):
         v = v.transpose(1, 2)
 
         if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # default 1/sqrt(d) scale, no temperature
+            out = F.scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)  # use fixed 1/d scale, no scalar temperature
         else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, is_causal=True)   # default 1/sqrt(d) scale, no temperature
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)   # use fixed 1/d scale, no scalar temperature
             self.entropy_sum.add_(sum_ent.detach())
             self.entropy_count.add_(n)
         

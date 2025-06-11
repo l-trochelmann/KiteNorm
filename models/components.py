@@ -97,6 +97,20 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
+class RMSNorm_Simple(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        # x: (bsz, T, dim)
+        output = self._norm(x.float()).type_as(x) # (bsz, T, dim)
+        return output
+
+
 class MLP(nn.Module):
     def __init__(self, dim: int, hidden_dim: int, multiple_of: int = 256):
         super().__init__()
