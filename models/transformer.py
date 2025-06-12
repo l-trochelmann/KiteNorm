@@ -21,6 +21,7 @@ class ModelConfig:
     ln_config: str
     ln_style: str
     attn_style: str
+    drop_which_ln: int
     ln_use_shift: bool = False
     dyt_alpha_init: float = 0.5
     mlp: str = 'mlp'
@@ -399,8 +400,7 @@ class Transformer(nn.Module):
             self.layers = nn.ModuleList([Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'mix-LN':  # Use partly post-LN and partly pre-LN based on a ratio parameter, followed by out_norm. Post-LN first.
             self.layers = nn.ModuleList([Block_PostLN(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
-                else Block_PreLN(idx, cfg)
-                for idx in range(cfg.n_layers)])
+                                         else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
         elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
             self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
@@ -414,10 +414,17 @@ class Transformer(nn.Module):
             self.layers = nn.ModuleList([Block_OnlyAttnPostLN(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'OnlyMLPPostLN':  # ABLATION
             self.layers = nn.ModuleList([Block_OnlyMLPPostLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'pre-LN-drop':  # ABLATION: Drop norm only in specific layer
+            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
+                                        else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+            self.out_norm = _get_ln_variant(cfg)
+        elif cfg.ln_config == 'post-LN-drop': # ABLATION: Drop norm only in specific layer
+            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
+                                        else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'None':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]

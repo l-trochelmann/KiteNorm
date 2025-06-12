@@ -25,7 +25,8 @@ mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None'
+ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'pre-LN-drop', 'post-LN-drop'
+drop_which_ln: 5  # Which ln to drop if using 'pre-LN-drop', choose from 0, ...,  n_layers-1
 ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
