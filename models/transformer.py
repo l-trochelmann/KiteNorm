@@ -278,6 +278,70 @@ class Block_NoLN(nn.Module):
         return x 
 
 
+class Block_OnlyAttnPreLN(nn.Module):
+    """ABLATION: In pre-LN, drop MLP norm"""
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.attn_norm = _get_ln_variant(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.layer_id = layer_id
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = x + self.attn(self.attn_norm(x), freqs_cis)
+        x = x + self.mlp(x)
+        return x
+
+
+class Block_OnlyMLPPreLN(nn.Module):
+    """ABLATION: In pre-LN, drop Attn norm"""
+
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.mlp_norm = _get_ln_variant(cfg)
+        self.layer_id = layer_id
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = x + self.attn(x, freqs_cis)
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
+
+
+class Block_OnlyAttnPostLN(nn.Module):
+    """ABLATION: In post-LN, drop MLP norm"""
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.attn_norm = _get_ln_variant(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.layer_id = layer_id
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = self.attn_norm(x + self.attn(x, freqs_cis))
+        x = x + self.mlp(x)
+        return x
+
+
+class Block_OnlyMLPPostLN(nn.Module):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.mlp_norm = _get_ln_variant(cfg)
+        self.layer_id = layer_id
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = x + self.attn(x, freqs_cis)
+        x = self.mlp_norm(x + self.mlp(x))
+        return x
+
+
 class Block_ReZero(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -340,10 +404,20 @@ class Transformer(nn.Module):
             self.out_norm = _get_ln_variant(cfg)
         elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
             self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'OnlyAttnPreLN':  # ABLATION
+            self.layers = nn.ModuleList([Block_OnlyAttnPreLN(idx, cfg) for idx in range(cfg.n_layers)])
+            self.out_norm = _get_ln_variant(cfg)
+        elif cfg.ln_config == 'OnlyMLPPreLN':  # ABLATION
+            self.layers = nn.ModuleList([Block_OnlyMLPPreLN(idx, cfg) for idx in range(cfg.n_layers)])
+            self.out_norm = _get_ln_variant(cfg)
+        elif cfg.ln_config == 'OnlyAttnPostLN':  # ABLATION
+            self.layers = nn.ModuleList([Block_OnlyAttnPostLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'OnlyMLPPostLN':  # ABLATION
+            self.layers = nn.ModuleList([Block_OnlyMLPPostLN(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'None':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -361,7 +435,7 @@ class Transformer(nn.Module):
         self.freqs_cis = self.freqs_cis.to(x.device)
         for layer in self.layers:
             x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
-        if self.ln_config in ('pre-LN', 'mix-LN'):  # Only use out_norm when needed
+        if self.ln_config in ('pre-LN', 'mix-LN', 'OnlyAttnPreLN', 'OnlyMLPPreLN'):  # Only use out_norm when the transformer ends with pre-LN
             x = self.out_norm(x)
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 

@@ -26,7 +26,7 @@ tie_embeddings: False
 torch_compile: True
 
 ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None'
-ln_style: 'RMSNorm_Simple'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
+ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
 dyt_alpha_init: 0.5  # initialisation value for DyT scalars
@@ -68,8 +68,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple'
-exp_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple'
+wandb_run_name: 'tr_70M_sp_pre-LN_RMSNorm'
+exp_name: 'tr_70M_sp_pre-LN_RMSNorm'
 check_existing_wandb_run: False
 track_model_update: True
 track_grad_norm: True
