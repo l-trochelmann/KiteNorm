@@ -69,10 +69,13 @@ def _get_attn(cfg):
         return QKLNAttention(cfg)
     elif cfg.attn_style == 'QK-RMSNorm':
         return QKRMSNormAttention(cfg)
+    elif cfg.attn_style == 'QKGainOnly':
+        return QKGainOnly(cfg)
+    elif cfg.attn_style == 'QKNormOnly':
+        return QKNormOnly(cfg)
     else:
-        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'")
+        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm', 'QKGainOnly', 'QKNormOnly'")
         
-
 
 def _scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     """Adapted from docs.pytorch.org, this is a python equivalent to torch.nn.functional.scaled_dot_product_attention"""
@@ -265,6 +268,78 @@ class QKRMSNormAttention(Attention):
         return self.w_out(out)
 
 
+class QKGainOnly(Attention):
+    """QKNorm Ablation: Dropping normalisation"""
+    def __init__(self, cfg: ModelConfig):
+        super().__init__(cfg)
+
+        g0 = math.log2(cfg.qknorm_L97 * cfg.qknorm_L97 - cfg.qknorm_L97)  # Initialise temperature
+        self.g = nn.Parameter(torch.tensor(g0))
+
+
+    def forward(self, x, freqs_cis):
+        bsz, seqlen, d = x.shape
+        
+        q, k, v = self.w_qkv(x).split(d, dim=2)
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
+        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
+        
+        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
+
+        q = q * self.g  # Apply temperature. Note that (q*g)k^T =  g*(qk^T)
+        
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        if not self.track_entropy:
+            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
+        else:
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
+            self.entropy_sum.add_(sum_ent.detach())
+            self.entropy_count.add_(n)
+        
+        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
+
+        return self.w_out(out)
+
+
+class QKNormOnly(Attention):
+    """QKNorm Ablation: Dropping temperature"""
+    def __init__(self, cfg: ModelConfig):
+        super().__init__(cfg)
+
+
+    def forward(self, x, freqs_cis):
+        bsz, seqlen, d = x.shape
+        
+        q, k, v = self.w_qkv(x).split(d, dim=2)
+        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
+        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
+        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
+        
+        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
+
+        q = q / (q.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension
+        k = k / (k.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension
+        
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        if not self.track_entropy:
+            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
+        else:
+            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
+            self.entropy_sum.add_(sum_ent.detach())
+            self.entropy_count.add_(n)
+        
+        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
+
+        return self.w_out(out)
+
+
 class Block_NoLN(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -392,6 +467,7 @@ class Transformer(nn.Module):
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
+        self.out_norm = None  # Only use out_norm when needed
         self.ln_config = cfg.ln_config
         if cfg.ln_config == 'pre-LN':  # Use pre-LN blocks and out_norm
             self.layers = nn.ModuleList([Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
@@ -417,14 +493,20 @@ class Transformer(nn.Module):
         elif cfg.ln_config == 'pre-LN-drop':  # ABLATION: Drop norm only in specific layer
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
                                         else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = _get_ln_variant(cfg)
+            self.out_norm = None if cfg.drop_which_ln == -1 else _get_ln_variant(cfg)
         elif cfg.ln_config == 'post-LN-drop': # ABLATION: Drop norm only in specific layer
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
                                         else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'pre-LN-stripped':  # pre-LN only in first layer
+            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx != 0
+                                        else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'post-LN-stripped':  # post-LN only in first and last layer
+            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx not in (0,5)
+                                        else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)]) 
         elif cfg.ln_config == 'None':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -442,7 +524,7 @@ class Transformer(nn.Module):
         self.freqs_cis = self.freqs_cis.to(x.device)
         for layer in self.layers:
             x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
-        if self.ln_config in ('pre-LN', 'mix-LN', 'OnlyAttnPreLN', 'OnlyMLPPreLN'):  # Only use out_norm when the transformer ends with pre-LN
+        if self.out_norm is not None:  # Only use out_norm when needed
             x = self.out_norm(x)
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 

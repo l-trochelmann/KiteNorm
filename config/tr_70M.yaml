@@ -25,10 +25,10 @@ mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'pre-LN-drop', 'post-LN-drop'
-drop_which_ln: 5  # Which ln to drop if using 'pre-LN-drop', choose from 0, ...,  n_layers-1
-ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
-attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm'
+ln_config: 'pre-LN'  # choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'
+drop_which_ln: -1  # Which ln to drop if using 'pre-LN-drop', choose from 0, ...,  n_layers-1, -1 (-1 for out_norm if applicable)
+ln_style: 'RMSNorm_Simple'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
+attn_style: 'QKNorm'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm', 'QKGainOnly', 'QKNormOnly'
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
 dyt_alpha_init: 0.5  # initialisation value for DyT scalars
 mixLN_ratio: 0.25  # post-LN ratio when using mix-LN
@@ -69,8 +69,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'tr_70M_sp_pre-LN_RMSNorm'
-exp_name: 'tr_70M_sp_pre-LN_RMSNorm'
+wandb_run_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple_QKNorm'
+exp_name: 'tr_70M_sp_pre-LN_RMSNorm-Simple_QKNorm'
 check_existing_wandb_run: False
 track_model_update: True
 track_grad_norm: True
