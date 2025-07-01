@@ -32,3 +32,7 @@ Thumbs.db
 # Ignore Weights & Biases (wandb) files
 wandb/
 *.wandb
+
+# Ignore CNN-related data and checkpoints
+CNN/checkpoint
+CNN/data
