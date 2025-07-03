@@ -11,8 +11,22 @@ import torchvision.transforms as transforms
 import os
 import argparse
 
+import wandb
+from collections import defaultdict
+
 from models import ResNet18
 from utils import progress_bar
+
+
+def init_wandb():
+  """Minimal wandb setup"""
+  os.environ["WANDB__SERVICE_WAIT"] = "600"
+  os.environ["WANDB_SILENT"] = "true"
+  wandb.init(
+    project = 'LN-variants', 
+    name = 'CNN_baseline', 
+    dir = '/home/ltrochelmann/LN-variants/logs/wandb'
+  )
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
@@ -24,6 +38,8 @@ args = parser.parse_args()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+init_wandb()
 
 # Data
 print('==> Preparing data..')
@@ -92,6 +108,8 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 # Training
 def train(epoch):
     print('\nEpoch: %d' % epoch)
+    global final_train_loss
+    global final_train_acc
     net.train()
     train_loss = 0
     correct = 0
@@ -111,10 +129,14 @@ def train(epoch):
 
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                      % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+    final_train_loss = train_loss
+    final_train_acc = 100.*correct/total
 
 
 def test(epoch):
     global best_acc
+    global final_test_loss
+    global final_test_acc
     net.eval()
     test_loss = 0
     correct = 0
@@ -132,6 +154,8 @@ def test(epoch):
 
             progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                          % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        final_test_loss = test_loss
+        final_test_acc = 100.*correct/total
 
     # Save checkpoint.
     acc = 100.*correct/total
@@ -149,6 +173,22 @@ def test(epoch):
 
 
 for epoch in range(start_epoch, start_epoch+200):
+    metrics = defaultdict(list)
+    final_train_loss = 0
+    final_train_acc = 0
+    final_test_loss = 0
+    final_test_acc = 0
     train(epoch)
     test(epoch)
+
+    metrics = {
+        "epoch": epoch,
+        "lr": args.lr,
+        "train_loss": final_train_loss,
+        "train_acc": final_train_acc,
+        "valid_loss": final_test_loss,
+        "valid_acc": final_test_acc
+    }
+    wandb.log(metrics)
+
     scheduler.step()
