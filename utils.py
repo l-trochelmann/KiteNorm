@@ -139,7 +139,7 @@ def compute_model_update_cosine(model, init_logits, probe_inputs, ctx):
 
 
 def compute_param_update_l2(model, init_params):
-  """Computes gradient l2 norms for the last layer of each MLP.
+  """Tracks parameter update size via l2 distance from initialisation
     
   Returns:
       dict: A dictionary mapping layer names to their cumulative l2 parameter update
@@ -164,7 +164,7 @@ def compute_param_update_l2(model, init_params):
 
 
 def compute_param_update_cosine(model, init_params):
-  """Computes gradient l2 norms for the last layer of each MLP.
+  """Tracks parameter update size via cosine distance from initialisation
     
   Returns:
       dict: A dictionary mapping layer names to their cumulative cosine parameter update
@@ -206,6 +206,11 @@ def get_softmax_entropy(model):
 
 
 def get_ln_param_stats(model):
+  """Computes mean and std of all normalisation-related affine parameters.
+    
+  Returns:
+      dict: A dictionary mapping parameter names to their mean and std.
+  """
   ln_param_stats = {}
   with torch.no_grad():
     for name, param in model.named_parameters():
