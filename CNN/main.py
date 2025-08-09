@@ -10,25 +10,64 @@ import torchvision.transforms as transforms
 
 import os
 import argparse
+import random
+import numpy as np
 
 import wandb
-from collections import defaultdict
 
-from models import ResNet18
+from models import ResNet18, ResNet18LN, PreNormNet, PostNormNet, NoNormNet
 from utils import progress_bar
 
 
+LOG_EVERY_BATCH = False  # For fine-grained analysis or debugging
+
+
+# Metrics
 def init_wandb():
   """Minimal wandb setup"""
   os.environ["WANDB__SERVICE_WAIT"] = "600"
   os.environ["WANDB_SILENT"] = "true"
   wandb.init(
     project = 'LN-variants', 
-    name = 'CNN_baseline', 
+    name = 'PreNormNet_4x2L',
     dir = '/home/ltrochelmann/LN-variants/logs/wandb'
   )
 
 
+def compute_grad_norms(model):
+  """Computes gradient l2 norms for all parameters.
+    
+  Returns:
+      dict: A dictionary mapping parameter names to their gradient norms
+  """
+  grad_norms = {}
+  for name, param in model.named_parameters():
+    if param.grad is None:
+      continue
+    with torch.no_grad():
+      grad_norms[f"grad_l2-norm/{name}"] = param.grad.norm(p=2).item()
+  return grad_norms
+
+
+def get_ln_param_stats(model):
+  """Computes mean and std of all normalisation-related affine parameters.
+  
+  Returns:
+      dict: A dictionary mapping parameter names to their mean and std.
+  """
+  ln_param_stats = {}
+  with torch.no_grad():
+    for name, param in model.named_parameters():
+      if any(sub in name for sub in ["bn1.weight", "bn2.weight", "shortcut.1.weight", "norm.weight"]):
+        ln_param_stats[f"LN_gain_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"LN_gain_std/{name}"] = param.data.std().item()
+      elif any(sub in name for sub in ["bn1.bias", "bn2.bias", "shortcut.1.bias", "norm.bias"]):
+        ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
+        ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
+  return ln_param_stats
+
+
+# Args
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true',
@@ -40,6 +79,20 @@ best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 init_wandb()
+
+
+# Seed
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    """--Bit-wise seeded determinism if needed--
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False"""
+
 
 # Data
 print('==> Preparing data..')
@@ -68,23 +121,13 @@ testloader = torch.utils.data.DataLoader(
 classes = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
+
 # Model
 print('==> Building model..')
-# net = VGG('VGG19')
-net = ResNet18()
-# net = PreActResNet18()
-# net = GoogLeNet()
-# net = DenseNet121()
-# net = ResNeXt29_2x64d()
-# net = MobileNet()
-# net = MobileNetV2()
-# net = DPN92()
-# net = ShuffleNetG2()
-# net = SENet18()
-# net = ShuffleNetV2(1)
-# net = EfficientNetB0()
-# net = RegNetX_200MF()
-# net = SimpleDLA()
+# net = PostNormNet(n_blocks = 4)
+net = PreNormNet(n_blocks = 2)
+# net = NoNormNet(n_blocks = 4)
+
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -108,8 +151,9 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 # Training
 def train(epoch):
     print('\nEpoch: %d' % epoch)
-    global final_train_loss
-    global final_train_acc
+    if not LOG_EVERY_BATCH:
+        global epoch_train_loss
+        global epoch_train_acc
     net.train()
     train_loss = 0
     correct = 0
@@ -129,14 +173,27 @@ def train(epoch):
 
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                      % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-    final_train_loss = train_loss
-    final_train_acc = 100.*correct/total
-
+        
+        if LOG_EVERY_BATCH:
+            metrics = {
+                "epoch": epoch,
+                "lr": args.lr,
+                "train_loss": train_loss/(batch_idx+1),
+                "train_acc": 100.*correct/total
+            }
+            metrics.update(compute_grad_norms(net))
+            metrics.update(get_ln_param_stats(net))
+            wandb.log(metrics)
+    if not LOG_EVERY_BATCH:
+        epoch_train_loss = train_loss
+        epoch_train_acc = 100.*correct/total
+    
 
 def test(epoch):
     global best_acc
     global final_test_loss
     global final_test_acc
+
     net.eval()
     test_loss = 0
     correct = 0
@@ -173,22 +230,26 @@ def test(epoch):
 
 
 for epoch in range(start_epoch, start_epoch+200):
-    metrics = defaultdict(list)
-    final_train_loss = 0
-    final_train_acc = 0
+    if not LOG_EVERY_BATCH:
+        epoch_train_loss = 0
+        epoch_train_acc = 0
     final_test_loss = 0
     final_test_acc = 0
     train(epoch)
     test(epoch)
-
+    
     metrics = {
         "epoch": epoch,
         "lr": args.lr,
-        "train_loss": final_train_loss,
-        "train_acc": final_train_acc,
         "valid_loss": final_test_loss,
         "valid_acc": final_test_acc
     }
+    if not LOG_EVERY_BATCH:
+       metrics["train_loss"] = epoch_train_loss
+       metrics["train_acc"] = epoch_train_acc
+
+    metrics.update(compute_grad_norms(net))
+    metrics.update(get_ln_param_stats(net))
     wandb.log(metrics)
 
     scheduler.step()

@@ -39,6 +39,24 @@ class BasicBlock(nn.Module):
         return out
 
 
+class BasicBlockLN(BasicBlock):
+    def __init__(self, in_planes, planes, stride=1):
+        super().__init__(in_planes, planes, stride)
+
+        # replace batchnorm with layernorm
+        self.bn1 = nn.GroupNorm(1, planes)
+        self.bn2 = nn.GroupNorm(1, planes)
+
+        # if the shortcut is a projection (i.e. Sequential of [Conv2d, BatchNorm2d]),
+        # also replace batchnorm with layernorm here
+        if isinstance(self.shortcut, nn.Sequential) and len(self.shortcut) == 2:
+            conv, _ = self.shortcut
+            self.shortcut = nn.Sequential(
+                conv,
+                nn.GroupNorm(1, planes * self.expansion)
+            )
+
+
 class Bottleneck(nn.Module):
     expansion = 4
 
@@ -104,9 +122,18 @@ class ResNet(nn.Module):
         return out
 
 
+class ResNetLN(ResNet):
+    def __init__(self, block, num_blocks, num_classes=10):
+        super().__init__(block, num_blocks, num_classes)
+        self.bn1 = nn.GroupNorm(1,64)  # Replace batchnorm with layernorm
+
+
+
 def ResNet18():
     return ResNet(BasicBlock, [2, 2, 2, 2])
 
+def ResNet18LN():
+    return ResNetLN(BasicBlockLN, [2, 2, 2, 2])
 
 def ResNet34():
     return ResNet(BasicBlock, [3, 4, 6, 3])
