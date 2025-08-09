@@ -1,6 +1,9 @@
 # Executable should be a full path
 executable=/home/ltrochelmann/LN-variants/CNN/cluster/condor.sh
 
+# Pass arguments to the executable
+arguments  = $(lr)
+
 # Logs
 LOGS_DIR=/home/ltrochelmann/LN-variants/logs
 error = $(LOGS_DIR)/err/job.$(Cluster).$(Process).err
@@ -12,4 +15,11 @@ request_memory = 250000
 request_cpus = 12
 request_gpus = 1
 requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Machine != "g147.internal.cluster.is.localnet") && (TARGET.Machine != "g132.internal.cluster.is.localnet")
-queue $(n_jobs)
+
+queue lr from (
+    0.005
+    0.01
+    0.02
+    0.05
+    0.1
+)

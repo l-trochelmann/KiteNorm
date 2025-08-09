@@ -7,6 +7,10 @@ echo "Activating environment"
 source /home/ltrochelmann/miniforge3/etc/profile.d/conda.sh
 conda activate ln-variants
 
+# Job specific vars
+echo "Assigning job variables"
+LR=$1
+
 # Execute python script
-echo "Executing job script"
-python /home/ltrochelmann/LN-variants/CNN/main.py
+echo "Executing with lr=${LR}"
+python /home/ltrochelmann/LN-variants/CNN/main.py --lr $LR
