@@ -18,6 +18,7 @@ class ModelConfig:
     expand: float
     n_layers: int
     n_heads: int
+    weight_init: str
     ln_config: str
     ln_style: str
     attn_style: str
@@ -434,6 +435,23 @@ class Block_ReZero(nn.Module):
         return x    
 
 
+class Block_DeepNorm(nn.Module):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.attn_norm = _get_ln_variant(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.mlp_norm = _get_ln_variant(cfg)
+        self.layer_id = layer_id
+        self.alpha = (2* cfg.n_layers)**(1/4)
+
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        x = self.attn_norm(self.alpha * x + self.attn(x, freqs_cis))
+        x = self.mlp_norm(self.alpha * x + self.mlp(x))
+        return x
+
+
 class Block_LN(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -463,11 +481,13 @@ class Block_PostLN(Block_LN):
 class Transformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        self.weight_init = cfg.weight_init
         self.n_layers = cfg.n_layers
+        self.dim = cfg.dim
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
-        self.out_norm = None  # Only use out_norm when needed
+        self.out_norm = None
         self.ln_config = cfg.ln_config
         if cfg.ln_config == 'pre-LN':  # Use pre-LN blocks and out_norm
             self.layers = nn.ModuleList([Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
@@ -480,6 +500,8 @@ class Transformer(nn.Module):
             self.out_norm = _get_ln_variant(cfg)
         elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
             self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
+        elif cfg.ln_config == 'DeepNorm':
+            self.layers = nn.ModuleList([Block_DeepNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'OnlyAttnPreLN':  # ABLATION
             self.layers = nn.ModuleList([Block_OnlyAttnPreLN(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
@@ -506,7 +528,7 @@ class Transformer(nn.Module):
         elif cfg.ln_config == 'None':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'None', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'None', 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -524,24 +546,65 @@ class Transformer(nn.Module):
         self.freqs_cis = self.freqs_cis.to(x.device)
         for layer in self.layers:
             x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
-        if self.out_norm is not None:  # Only use out_norm when needed
+        if self.out_norm is not None:
             x = self.out_norm(x)
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if self.weight_init == 'Default':
+            if isinstance(module, nn.Linear):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif self.weight_init == 'Xavier':
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
+        elif self.weight_init == 'DeepNorm':
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):  # DeepNet doesn't specify embedding initialisation, so we keep the default init
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif self.weight_init == 'T-Fixup':
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
 
     def _scale_residual_branches(self):
-        for n, p in self.named_parameters():
-            if n.endswith('fc2.weight'): # mlp/glu output layer
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
-            if n.endswith('w_out.weight'): # attn output layer
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
+        if self.weight_init == 'Default':
+            for n, p in self.named_parameters():
+                if n.endswith('fc2.weight'): # mlp/glu output layer
+                    torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
+                if n.endswith('w_out.weight'): # attn output layer
+                    torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
+        elif self.weight_init == 'DeepNorm':
+            with torch.no_grad():
+                beta = (8*self.n_layers)**(-1/4)
+                d = self.dim
+                for n, p in self.named_parameters():
+                    if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight"):
+                        p.mul_(beta)
+                    if n.endswith("w_qkv.weight"):
+                        p[2*d:3*d, :].mul_(beta)  # rescale only the value projection
+        elif self.weight_init == 'T-Fixup':
+            with torch.no_grad():
+                t_fixup_scalar = (6 * self.n_layers)**(-1/4)  # derived from L_d=2N, as compared to the encoder-decoder case where L_d=3N
+                d = self.dim
+                for n, p in self.named_parameters():
+                    if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight") or n.endswith("embed_tokens.weight"):
+                        p.mul_(t_fixup_scalar)
+                    if n.endswith("w_qkv.weight"):
+                        p[2*d:3*d, :].mul_(t_fixup_scalar)  # rescale only the value projection
 
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight
