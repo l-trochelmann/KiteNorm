@@ -525,10 +525,10 @@ class Transformer(nn.Module):
         elif cfg.ln_config == 'post-LN-stripped':  # post-LN only in first and last layer
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx not in (0,5)
                                         else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)]) 
-        elif cfg.ln_config == 'None':
+        elif cfg.ln_config == 'No-LN':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'None', 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'No-LN', 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
