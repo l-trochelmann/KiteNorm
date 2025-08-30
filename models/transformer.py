@@ -564,7 +564,7 @@ class Transformer(nn.Module):
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
-                torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif self.weight_init == 'DeepNorm':
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
@@ -581,12 +581,13 @@ class Transformer(nn.Module):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
 
     def _scale_residual_branches(self):
-        if self.weight_init == 'Default':
-            for n, p in self.named_parameters():
-                if n.endswith('fc2.weight'): # mlp/glu output layer
-                    torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
-                if n.endswith('w_out.weight'): # attn output layer
-                    torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * self.n_layers))
+        if self.weight_init in ('Default', 'Xavier'):
+            with torch.no_grad():
+                for n, p in self.named_parameters():
+                    if n.endswith('fc2.weight'): # mlp/glu output layer
+                        p.mul_(1/math.sqrt(2 * self.n_layers))
+                    if n.endswith('w_out.weight'): # attn output layer
+                        p.mul_(1/math.sqrt(2 * self.n_layers))
         elif self.weight_init == 'DeepNorm':
             with torch.no_grad():
                 beta = (8*self.n_layers)**(-1/4)
