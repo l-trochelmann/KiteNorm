@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 # Blocks
 class NormBlock(nn.Module):
@@ -46,10 +47,11 @@ class NoNormBlock(NormBlock):
 
 # Architectures
 class BlockNormNet(nn.Module):
-    def __init__(self, block, num_blocks, is_post_norm, num_classes=10):
+    def __init__(self, block, num_blocks, use_res_scale, is_post_norm, num_classes=10):
         super().__init__()
         self.in_planes = 64
         self.is_post_norm = is_post_norm
+        self.use_res_scale = use_res_scale
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         if self.is_post_norm:
@@ -63,8 +65,14 @@ class BlockNormNet(nn.Module):
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
+        if self.use_res_scale:  # yields cumulative variance that is invariant to n_blocks. Derived for the conv layer specifically.
+            res_scale = math.sqrt(2.0) / math.sqrt(num_blocks)  
         for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
+            b = block(self.in_planes, planes, stride)
+            if self.use_res_scale:
+                with torch.no_grad():
+                    b.conv1.weight.mul_(res_scale)
+            layers.append(b)
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
@@ -83,12 +91,12 @@ class BlockNormNet(nn.Module):
 
 
 # Nets. n_blocks sets the number of blocks per spatial resolution
-def PreNormNet(n_blocks):
-    return BlockNormNet(PreNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], is_post_norm=False)
+def PreNormNet(n_blocks, use_res_scale):
+    return BlockNormNet(PreNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], use_res_scale, is_post_norm=False)
 
-def PostNormNet(n_blocks):
-    return BlockNormNet(PostNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], is_post_norm=True)
+def PostNormNet(n_blocks, use_res_scale):
+    return BlockNormNet(PostNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], use_res_scale, is_post_norm=True)
 
-def NoNormNet(n_blocks):
-    return BlockNormNet(NoNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], is_post_norm=False)
+def NoNormNet(n_blocks, use_res_scale):
+    return BlockNormNet(NoNormBlock, [n_blocks, n_blocks, n_blocks, n_blocks], use_res_scale, is_post_norm=False)
 

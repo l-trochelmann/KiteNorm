@@ -29,7 +29,7 @@ def init_wandb():
   os.environ["WANDB_SILENT"] = "true"
   wandb.init(
     project = 'LN-variants', 
-    name = 'PreNormNet_4x2L',
+    name = 'PostNormNet_4x16L_res-scale',
     dir = '/home/ltrochelmann/LN-variants/logs/wandb'
   )
 
@@ -124,9 +124,9 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 
 # Model
 print('==> Building model..')
-# net = PostNormNet(n_blocks = 4)
-net = PreNormNet(n_blocks = 2)
-# net = NoNormNet(n_blocks = 4)
+net = PostNormNet(n_blocks = 16, use_res_scale=True)
+# net = PreNormNet(n_blocks = 8, use_res_scale=False)
+# net = NoNormNet(n_blocks = 16, use_res_scale=True)
 
 net = net.to(device)
 if device == 'cuda':
