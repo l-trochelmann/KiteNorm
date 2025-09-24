@@ -34,5 +34,5 @@ wandb/
 *.wandb
 
 # Ignore CNN-related data and checkpoints
-CNN/checkpoint
-CNN/data
+non_transformer/checkpoint
+non_transformer/data
