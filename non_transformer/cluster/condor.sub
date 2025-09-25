@@ -1,5 +1,5 @@
 # Executable should be a full path
-executable=/home/ltrochelmann/LN-variants/CNN/cluster/condor.sh
+executable=/home/ltrochelmann/LN-variants/non_transformer/cluster/condor.sh
 
 # Pass arguments to the executable
 arguments  = $(lr)

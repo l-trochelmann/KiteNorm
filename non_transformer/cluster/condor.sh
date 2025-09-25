@@ -13,4 +13,4 @@ LR=$1
 
 # Execute python script
 echo "Executing with lr=${LR}"
-python /home/ltrochelmann/LN-variants/CNN/main.py --lr $LR
+python /home/ltrochelmann/LN-variants/non_transformer/main.py --lr $LR
