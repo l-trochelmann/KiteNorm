@@ -1,4 +1,5 @@
 '''Train CIFAR10 with PyTorch.'''
+from calendar import Calendar
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,12 +16,12 @@ import numpy as np
 
 import wandb
 
-from models import ResNet18, ResNet18LN, PreNormNet, PostNormNet, NoNormNet
+import models 
 from utils import progress_bar
 
 
 LOG_EVERY_BATCH = False  # For fine-grained analysis or debugging
-
+CALC_HESSIAN_METRICS = False  # Compute and log/store (?) Hessian metrics
 
 # Metrics
 def init_wandb():
@@ -29,7 +30,7 @@ def init_wandb():
   os.environ["WANDB_SILENT"] = "true"
   wandb.init(
     project = 'LN-variants', 
-    name = 'PostNormNet_4x16L_res-scale',
+    name = 'PureFFN_8L_512d',
     dir = '/home/ltrochelmann/LN-variants/logs/wandb'
   )
 
@@ -124,9 +125,15 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 
 # Model
 print('==> Building model..')
-net = PostNormNet(n_blocks = 16, use_res_scale=True)
-# net = PreNormNet(n_blocks = 8, use_res_scale=False)
-# net = NoNormNet(n_blocks = 16, use_res_scale=True)
+# net = models.PostNormNet(n_blocks = 16, use_res_scale=False)
+# net = models.PreNormNet(n_blocks = 8, use_res_scale=False)
+# net = models.NoNormNet(n_blocks = 16, use_res_scale=True)
+
+# net = models.PreNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
+# net = models.PostNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
+# net = models.NoNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
+# net = models.NormFFN(L = 8, use_relu = True, d_model = 512)
+net = models.PureFFN(L = 8, use_relu = True, d_model = 512)
 
 net = net.to(device)
 if device == 'cuda':
@@ -146,6 +153,14 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+
+
+# Hessian at initialisation
+if CALC_HESSIAN_METRICS:
+    net.eval()
+    # compute metrics with pyhessian, see recent notes
+    # store plot directly
+    pass
 
 
 # Training
