@@ -355,6 +355,20 @@ class Block_NoLN(nn.Module):
         return x 
 
 
+class Block_NoLN_Reparam(nn.Module):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.layer_id = layer_id
+        self.res_scale = 1 / math.sqrt(2 * cfg.n_layers)
+
+    def forward(self, x, freqs_cis):
+        x = x + self.res_scale * self.attn(x, freqs_cis)
+        x = x + self.res_scale * self.mlp(x)
+        return x
+
+
 class Block_OnlyAttnPreLN(nn.Module):
     """ABLATION: In pre-LN, drop MLP norm"""
     def __init__(self, layer_id: int, cfg: ModelConfig):
@@ -519,12 +533,8 @@ class Transformer(nn.Module):
         elif cfg.ln_config == 'post-LN-drop': # ABLATION: Drop norm only in specific layer
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
                                         else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'pre-LN-stripped':  # pre-LN only in first layer
-            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx != 0
-                                        else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'post-LN-stripped':  # post-LN only in first and last layer
-            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx not in (0,5)
-                                        else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)]) 
+        elif cfg.ln_config == 'No-LN-reparam':
+            self.layers = nn.ModuleList([Block_NoLN_Reparam(idx, cfg) for idx in range(cfg.n_layers)])
         elif cfg.ln_config == 'No-LN':
             self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
         else:
@@ -551,7 +561,7 @@ class Transformer(nn.Module):
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
-        if self.weight_init == 'Default':
+        if self.weight_init == 'Default' or self.weight_init == 'Default_Reparam':
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
@@ -567,7 +577,7 @@ class Transformer(nn.Module):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif self.weight_init == 'DeepNorm':
             if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
+                torch.nn.init.xavier_normal_(module.weight, gain=1.0)
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):  # DeepNet doesn't specify embedding initialisation, so we keep the default init
@@ -588,6 +598,8 @@ class Transformer(nn.Module):
                         p.mul_(1/math.sqrt(2 * self.n_layers))
                     if n.endswith('w_out.weight'): # attn output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
+        elif self.weight_init == 'Default_Reparam':
+            return  # no res scale at initialisation, instead applied in each forward
         elif self.weight_init == 'DeepNorm':
             with torch.no_grad():
                 beta = (8*self.n_layers)**(-1/4)
@@ -596,7 +608,7 @@ class Transformer(nn.Module):
                     if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight"):
                         p.mul_(beta)
                     if n.endswith("w_qkv.weight"):
-                        p[2*d:3*d, :].mul_(beta)  # rescale only the value projection
+                        p[2*d:3*d, :].mul_(beta)  # isolate and rescale only the value projection
         elif self.weight_init == 'T-Fixup':
             with torch.no_grad():
                 t_fixup_scalar = (6 * self.n_layers)**(-1/4)  # derived from L_d=2N, as compared to the encoder-decoder case where L_d=3N

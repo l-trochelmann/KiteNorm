@@ -25,9 +25,9 @@ mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-weight_init: 'Default'  # choose from 'Default' (0.02 std + 1/sqrt(2L) residual scaling), 'DeepNorm', 'T-Fixup', 'Xavier' (xavier uniform sublayers, 0.02 normal embeddings, 1/sqrt(2L) residual scaling)
+weight_init: 'Default'  # choose from 'Default' (0.02 std + 1/sqrt(2L) residual scaling), 'Default_Reparam' (0.02 std, no residual scaling), 'DeepNorm', 'T-Fixup', 'Xavier' (xavier uniform sublayers, 0.02 normal embeddings, 1/sqrt(2L) residual scaling)
 
-ln_config: 'pre-LN'  # choose from 'No-LN', 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'
+ln_config: 'pre-LN'  # choose from 'No-LN', 'No-LN-reparam' (residual scaling in the forward), 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'
 ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm', 'QKGainOnly', 'QKNormOnly'
 drop_which_ln: 0  # Which ln to drop if using 'pre-LN-drop', choose from -1, 0, ...,  n_layers-1 (-1: out_norm)
