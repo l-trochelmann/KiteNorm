@@ -16,6 +16,9 @@ request_cpus = 12
 request_gpus = 1
 requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Machine != "g147.internal.cluster.is.localnet") && (TARGET.Machine != "g132.internal.cluster.is.localnet")
 
+# single run
+# queue lr from (0.1)
+
 # low spectrum
 # queue lr from (
 #     0.0001
@@ -26,24 +29,24 @@ requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Mac
 # )
 
 # high spectrum
-# queue lr from (
-#     0.005
-#     0.01
-#     0.02
-#     0.05
-#     0.1
-# )
-
-# full spectrum
 queue lr from (
-    0.0001
-    0.0002
-    0.0005
-    0.001
-    0.002
     0.005
     0.01
     0.02
     0.05
     0.1
 )
+
+# full spectrum
+# queue lr from (
+#     0.0001
+#     0.0002
+#     0.0005
+#     0.001
+#     0.002
+#     0.005
+#     0.01
+#     0.02
+#     0.05
+#     0.1
+# )

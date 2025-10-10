@@ -1,4 +1,4 @@
 from .resnet import *
-from .normnets import *
+from .normCNN import *
 from .normMLP import *
 

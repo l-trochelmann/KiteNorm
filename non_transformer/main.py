@@ -13,25 +13,25 @@ import os
 import argparse
 import random
 import numpy as np
-
 import wandb
 
 import models 
-from utils import progress_bar
 
+from utils import progress_bar
+from dataclasses import asdict
 
 LOG_EVERY_BATCH = False  # For fine-grained analysis or debugging
-CALC_HESSIAN_METRICS = False  # Compute and log/store (?) Hessian metrics
 
 # Metrics
-def init_wandb():
+def init_wandb(cfg, run_name):
   """Minimal wandb setup"""
   os.environ["WANDB__SERVICE_WAIT"] = "600"
   os.environ["WANDB_SILENT"] = "true"
   wandb.init(
     project = 'LN-variants', 
-    name = 'PureFFN_8L_512d',
-    dir = '/home/ltrochelmann/LN-variants/logs/wandb'
+    name = run_name,
+    dir = '/home/ltrochelmann/LN-variants/logs/wandb',
+    config = asdict(cfg)
   )
 
 
@@ -79,9 +79,6 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
-init_wandb()
-
-
 # Seed
 seed = 42
 random.seed(seed)
@@ -125,15 +122,33 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 
 # Model
 print('==> Building model..')
-# net = models.PostNormNet(n_blocks = 16, use_res_scale=False)
-# net = models.PreNormNet(n_blocks = 8, use_res_scale=False)
-# net = models.NoNormNet(n_blocks = 16, use_res_scale=True)
 
-# net = models.PreNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
-# net = models.PostNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
-# net = models.NoNormResidual(L = 8, use_relu = True, d_model = 512, use_res_scale=False)
-# net = models.NormFFN(L = 8, use_relu = True, d_model = 512)
-net = models.PureFFN(L = 8, use_relu = True, d_model = 512)
+# net_cfg = models.CNNConfig(
+#     n_blocks = 4,
+#     norm_config = "no-norm",      # Choose from "pre-norm", "post-norm", "no-norm".
+#     norm_variant = "LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
+#     use_res_scale = False,
+#     use_gain = True,
+#     use_bias = True,
+#     norm_eps = 1e-6
+# )
+# net = models.NormCNN(net_cfg)
+
+net_cfg = models.MLPConfig(
+    n_layers=8,
+    norm_config="pre-norm",     # Choose from "pre-norm", "post-norm", "no-norm". If use_residual=False, "pre-norm"="post-norm"
+    norm_variant="LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
+    use_res_scale=False,
+    use_gain=True,
+    use_bias=True,
+    norm_eps=1e-6,
+    use_residual=True,          # True -> Residual blocks; False -> FFN
+    use_relu=True
+)
+net = models.NormMLP(net_cfg)
+
+init_wandb(net_cfg, 'PreNormResidual_8L_sanitycheck')
+
 
 net = net.to(device)
 if device == 'cuda':
@@ -153,14 +168,6 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
-
-
-# Hessian at initialisation
-if CALC_HESSIAN_METRICS:
-    net.eval()
-    # compute metrics with pyhessian, see recent notes
-    # store plot directly
-    pass
 
 
 # Training
@@ -256,12 +263,12 @@ for epoch in range(start_epoch, start_epoch+200):
     metrics = {
         "epoch": epoch,
         "lr": args.lr,
-        "valid_loss": final_test_loss,
-        "valid_acc": final_test_acc
+        "valid/valid_loss": final_test_loss,
+        "valid/valid_acc": final_test_acc
     }
     if not LOG_EVERY_BATCH:
-       metrics["train_loss"] = epoch_train_loss
-       metrics["train_acc"] = epoch_train_acc
+       metrics["train/train_loss"] = epoch_train_loss
+       metrics["train/train_acc"] = epoch_train_acc
 
     metrics.update(compute_grad_norms(net))
     metrics.update(get_ln_param_stats(net))
