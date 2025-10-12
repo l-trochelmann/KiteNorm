@@ -269,12 +269,15 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
     "lr": optimizer.param_groups[0].get("lr", float("NaN")),
     "train/loss": train_loss,
-    "train/ppl": math.exp(train_loss),
+    "train/ppl": math.exp(train_loss) if train_loss < 709.78 else float("inf"),
+    # "train/ppl": math.exp(train_loss)
+
   }
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
-    new_metrics["valid/ppl"] = math.exp(valid_loss)
-  
+    new_metrics["valid/ppl"] = math.exp(valid_loss) if valid_loss < 709.78 else float("inf")
+    # new_metrics["valid/ppl"] = math.exp(valid_loss)
+
   # Add gradient norms if requested
   if cfg.track_grad_norm:
     grad_norms = compute_grad_norms(model)
