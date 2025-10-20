@@ -1,9 +1,7 @@
 '''Train CIFAR10 with PyTorch.'''
-from calendar import Calendar
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 
 import torchvision
@@ -129,27 +127,66 @@ with open(args.config, 'r') as f:
     cfg_dict = json.load(f)
 
 arch = cfg_dict.get("arch", "").lower()
+opt_name = cfg_dict.get("optim", "").lower()
+cfg_model = {k: v for k, v in cfg_dict.items() if k not in ("arch", "optim")}  # everything except the model class and optimiser is passed to the dataclass
 if arch == "cnn":
-    # everything except the model class is passed to the dataclass
-    cfg_dict_no_arch = {k: v for k, v in cfg_dict.items() if k != "arch"}
-    net_cfg = models.CNNConfig(**cfg_dict_no_arch)
+    net_cfg = models.CNNConfig(**cfg_model)
     net = models.NormCNN(net_cfg)
 elif arch == "mlp":
-    cfg_dict_no_arch = {k: v for k, v in cfg_dict.items() if k != "arch"}
-    net_cfg = models.MLPConfig(**cfg_dict_no_arch)
+    net_cfg = models.MLPConfig(**cfg_model)
     net = models.NormMLP(net_cfg)
 else:
     raise ValueError(f"Unsupported or missing 'arch' in config: {cfg_dict.get('arch')}")
 
 
 # Init wandb
-run_name = Path(args.config).name
-if run_name.endswith(".json"):
-    run_name = run_name[:-5]
-init_wandb(net_cfg, run_name + "_SGD")
+run_name = Path(args.config).stem
+if opt_name == "sgd":
+    run_suffix = "_SGD"
+elif opt_name =="adam":
+    run_suffix = "_Adam"
+else:
+    raise ValueError(f"Unsupported or missing 'optim' in config: {cfg_dict.get('optim')}")
+init_wandb(net_cfg, run_name + run_suffix)
 
 
-# Optimisation setup
+# Optimisation
+class WSD(object):
+  """Trapezoidal schedule / WSD: (linear) Warmup, Stable, (linear) Decay"""
+  def __init__(self, optimizer, lr_start, lr_max, lr_end, warmup_steps, cooldown_start_step, cooldown_steps):
+    self.optimizer = optimizer
+    self.lr_start = lr_start
+    self.lr_max = lr_max
+    self.lr_end = lr_end
+    self.warmup_steps = warmup_steps
+    self.cooldown_start_step = cooldown_start_step
+    self.cooldown_steps = cooldown_steps
+    self.iter = 0
+    
+    for group in self.optimizer.param_groups:
+      group["lr"] = lr_start
+
+  def schedule(self, t):
+    """returns lr(t), where t is the current step"""
+    if t <= self.warmup_steps:
+      return self.lr_start + (self.lr_max-self.lr_start)/self.warmup_steps * t
+    elif t <= self.cooldown_start_step:
+      return self.lr_max
+    return self.lr_max + (self.lr_end-self.lr_max)/self.cooldown_steps * (t-self.cooldown_start_step)
+
+  def step(self):
+    """computes new lr and sets it in self.optimizer"""
+    self.iter += 1
+    lr = self.schedule(self.iter)
+    for group in self.optimizer.param_groups:
+      group["lr"] = lr
+
+  def state_dict(self):
+    return {key: value for key, value in self.__dict__.items() if key != "optimizer"}
+
+  def load_state_dict(self, state_dict):
+    self.__dict__.update(state_dict)
+
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -165,17 +202,29 @@ if args.resume:
     start_epoch = checkpoint['epoch']
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                      momentum=0.9, weight_decay=5e-4)
-# optimizer = torch.optim.AdamW(
-#   net.parameters(),
-#   lr=args.lr,
-#   betas=[0.95, 0.95],
-#   weight_decay=0.1,
-#   fused=True, 
-# )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
-
+if opt_name == "sgd":
+    optimizer = optim.SGD(net.parameters(), lr=args.lr,
+                          momentum=0.9, weight_decay=5e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+elif opt_name == "adam":
+    optimizer = torch.optim.AdamW(
+    net.parameters(),
+    lr=args.lr,
+    betas=[0.95, 0.95],
+    weight_decay=0.1,
+    fused=True, 
+    )
+    scheduler = WSD(
+        optimizer,
+        lr_start = 1.e-10,
+        lr_max = args.lr,
+        lr_end = 0.0,
+        warmup_steps = 12,
+        cooldown_start_step = 200 - int(0.15 * 200),
+        cooldown_steps = int(0.15 * 200)
+    ) #  Mirroring tr config as close as possible
+else:
+    raise ValueError(f"Unsupported or missing 'optim' in config: {cfg_dict.get('optim')}")
 
 # Training
 def train(epoch):
@@ -206,7 +255,8 @@ def train(epoch):
         if LOG_EVERY_BATCH:
             metrics = {
                 "epoch": epoch,
-                "lr": args.lr,
+                "max_lr": args.lr,
+                "lr": optimizer.param_groups[0]["lr"],
                 "train_loss": train_loss/(batch_idx+1),
                 "train_acc": 100.*correct/total
             }
@@ -214,7 +264,7 @@ def train(epoch):
             metrics.update(get_ln_param_stats(net))
             wandb.log(metrics)
     if not LOG_EVERY_BATCH:
-        epoch_train_loss = train_loss
+        epoch_train_loss = train_loss/len(trainloader)
         epoch_train_acc = 100.*correct/total
     
 
@@ -240,7 +290,7 @@ def test(epoch):
 
             progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                          % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-        final_test_loss = test_loss
+        final_test_loss = test_loss/len(testloader)
         final_test_acc = 100.*correct/total
 
     # Save checkpoint.
@@ -269,7 +319,8 @@ for epoch in range(start_epoch, start_epoch+200):
     
     metrics = {
         "epoch": epoch,
-        "lr": args.lr,
+        "max_lr": args.lr,
+        "lr": optimizer.param_groups[0]["lr"],
         "valid/valid_loss": final_test_loss,
         "valid/valid_acc": final_test_acc
     }
