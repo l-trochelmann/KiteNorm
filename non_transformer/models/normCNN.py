@@ -19,9 +19,13 @@ class CNNConfig:
 
 class Norm2d(nn.Module):
     """
-    Layer/RMS norm for NCHW tensors with statistics over (C,H,W).
-    Uses F.layer_norm / F.rms_norm without affine, then applies
-    per-channel affine to mimic GroupNorm(1, C).
+    Layer/RMS norm (or variants) for NCHW tensors with statistics over (C,H,W).
+    We normalise per-sample over all features (C*H*W), then apply a per-channel
+    affine. Variants:
+      - 'layernorm'  : standard LayerNorm
+      - 'rmsnorm'    : RMSNorm
+      - 'detachnorm' : mean/std used for normalisation are detached
+      - 'onlyaffine' : no normalisation, only per-channel affine
     """
     def __init__(self, num_channels: int, cfg: CNNConfig):
         super().__init__()
@@ -39,6 +43,14 @@ class Norm2d(nn.Module):
             y = F.rms_norm(y, norm_shape, weight=None, eps=self.cfg.norm_eps)
         elif variant == 'layernorm':
             y = F.layer_norm(y, norm_shape, weight=None, bias=None, eps=self.cfg.norm_eps)
+        elif variant == 'detachnorm':
+            mean = y.mean(dim=-1, keepdim=True)
+            var  = y.var(dim=-1, unbiased=False, keepdim=True)
+            mean_detached = mean.detach()
+            std_detached  = (var + self.cfg.norm_eps).sqrt().detach()
+            y = (y - mean_detached) / std_detached
+        elif variant == 'onlyaffine':
+            pass
         else:
             raise ValueError(f"Invalid norm_variant: {self.cfg.norm_variant!r}")
         

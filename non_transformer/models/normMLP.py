@@ -20,6 +20,14 @@ class MLPConfig:
 
 
 class Norm1d(nn.Module):
+    """
+    Layer/RMS norm (or variants) over the last dimension.
+    Variants:
+      - 'layernorm'   : standard LayerNorm (no affine here)
+      - 'rmsnorm'     : RMSNorm (no affine here)
+      - 'detachnorm'  : mean/std for normalisation are detached
+      - 'onlyaffine'  : no normalisation, only per-channel affine
+    """
     def __init__(self, d_model: int, cfg: MLPConfig):
         super().__init__()
         self.cfg = cfg
@@ -33,6 +41,14 @@ class Norm1d(nn.Module):
             y = F.rms_norm(x, self._norm_shape, weight=None, eps=self.cfg.norm_eps)
         elif variant == 'layernorm':
             y = F.layer_norm(x, self._norm_shape, weight=None, bias=None, eps=self.cfg.norm_eps)
+        elif variant == 'detachnorm':
+            mean = x.mean(dim=-1, keepdim=True)
+            var  = x.var(dim=-1, unbiased=False, keepdim=True)
+            mean_detached = mean.detach()
+            std_detached  = (var + self.cfg.norm_eps).sqrt().detach()
+            y = (x - mean_detached) / std_detached
+        elif variant == 'onlyaffine':
+            y = x
         else:
             raise ValueError(f"Invalid norm_variant: {self.cfg.norm_variant!r}")
         if self.weight is not None:
