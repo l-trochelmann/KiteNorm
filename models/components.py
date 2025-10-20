@@ -48,7 +48,7 @@ class DetachNorm(nn.Module):
         return y
 
 
-class GainOnly(nn.Module):
+class OnlyAffine(nn.Module):
     """Ablation: LN gain without normalisation"""
     def __init__(self, dim: int, bias: bool = False):
         super().__init__()
@@ -60,26 +60,6 @@ class GainOnly(nn.Module):
         if self.bias is not None:
             output = output + self.bias
         return output
-
-
-class DyT(nn.Module):
-    """Dynamic Tangent rescaling as proposed by Zhu et al (2025)"""
-    def __init__(self, dim: int, alpha_init_value: float, bias: bool = False):
-        super().__init__()
-        self.normalized_shape = torch.Size([dim])
-        self.alpha_init_value = alpha_init_value
-
-        self.alpha = nn.Parameter(torch.ones(1) * alpha_init_value)
-        self.weight = nn.Parameter(torch.ones(self.normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(self.normalized_shape)) if bias else None
-    
-    def forward(self, x):
-        x = torch.tanh(self.alpha * x)
-        if self.bias is None:
-            x = x * self.weight
-        else:
-            x = x * self.weight + self.bias
-        return x
 
 
 class RMSNorm(torch.nn.Module):
@@ -95,20 +75,6 @@ class RMSNorm(torch.nn.Module):
         # x: (bsz, T, dim)
         output = self._norm(x.float()).type_as(x) # (bsz, T, dim)
         return output * self.weight
-
-
-class RMSNorm_Simple(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        # x: (bsz, T, dim)
-        output = self._norm(x.float()).type_as(x) # (bsz, T, dim)
-        return output
 
 
 class MLP(nn.Module):

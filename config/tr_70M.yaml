@@ -25,14 +25,13 @@ mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-weight_init: 'Default'  # choose from 'Default' (0.02 std + 1/sqrt(2L) residual scaling), 'Default_Reparam' (0.02 std, no residual scaling), 'DeepNorm', 'T-Fixup', 'Xavier' (xavier uniform sublayers, 0.02 normal embeddings, 1/sqrt(2L) residual scaling)
+weight_init: 'gpt2_res-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale', 'xavier_res-scale', 'xavier_no-scale', 't-fixup', (ablations: 'gpt2_glu-scale', 'gpt2_attn_scale')
 
-ln_config: 'pre-LN'  # choose from 'No-LN', 'No-LN-reparam' (residual scaling in the forward), 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'
-ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'
-attn_style: 'Default'  # choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm', 'QKGainOnly', 'QKNormOnly'
+ln_config: 'pre-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'mix-norm', (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-LN-drop', 'post-LN-drop')
+ln_style: 'RMSNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
+attn_style: 'Default'  # choose from 'Default', 'QKNorm'
 drop_which_ln: 0  # Which ln to drop if using 'pre-LN-drop', choose from -1, 0, ...,  n_layers-1 (-1: out_norm)
 ln_use_shift: True  # whether or not to use the bias parameter if applicable
-dyt_alpha_init: 0.5  # initialisation value for DyT scalars
 mixLN_ratio: 0.25  # post-LN ratio when using mix-LN
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
 
@@ -50,9 +49,9 @@ dtype: 'bfloat16'
 
 optim: 'adamw'
 fused_optim: True
-# normal grid: [1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
+# high spectrum grid: [1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
 # low spectrum grid: [1.e-5, 2.e-5, 5.e-5, 1.e-4, 2.e-4, 5.e-4]
-# extended normal grid: [1.e-4, 2.e-4, 5.e-4, 1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
+# full spectrum grid: [1.e-4, 2.e-4, 5.e-4, 1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
 lr: [1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
 weight_decay: 0.1
 beta1: 0.95  # to tune, do tied grid search on 0.9, 0.95, 0.975
@@ -82,7 +81,6 @@ track_grad_norm: True
 track_param_update: True
 track_softmax: True
 track_ln_weights: True
-track_block_grad_similarity: False
 
 resume: False
 resume_step: null

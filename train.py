@@ -47,7 +47,7 @@ def main(_):
   if not cfg.track_model_update:
     probe_inputs = None
     init_logits = None
-  else:   # TODO refactoring...
+  else:
     probe_batch = next(iter(trainloader))
     probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
     model.eval()
@@ -58,7 +58,6 @@ def main(_):
     init_params = None
   else:
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
-
 
   # Training
   print_master("=== Start Training! ===")

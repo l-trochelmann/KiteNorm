@@ -234,27 +234,6 @@ def get_ln_param_stats(model):
   return ln_param_stats
 
 
-def get_block_grad_similarity(model):
-  block_grad_similarity = {}
-
-  fc2 = []
-  for name, param in model.named_parameters():
-    if name.endswith("mlp.fc2.weight"):
-      idx = int(re.search(r"layers\.(\d+)\.", name).group(1))  # grab the number N in “layers.N.”
-      fc2.append((idx, name, param))
-
-  fc2.sort(key=lambda x: x[0])                 # [(0,…), (1,…), …, (5,…)]
-  neighbours = zip(fc2[::-1][:-1], fc2[::-1][1:])   # (5↔4), (4↔3), …, (1↔0)
-  for (idx_hi, name_hi, p_hi), (idx_lo, name_lo, p_lo) in neighbours:
-    with torch.no_grad():
-      if p_hi.grad is None or p_lo.grad is None:
-          continue
-      sim = F.cosine_similarity(p_hi.grad.flatten(), p_lo.grad.flatten(), dim=0)
-      block_grad_similarity[f"block_grad_similarity/{idx_hi}->{idx_lo}"] = sim.item()
-
-  return block_grad_similarity
-
-
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
@@ -270,13 +249,11 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     "lr": optimizer.param_groups[0].get("lr", float("NaN")),
     "train/loss": train_loss,
     "train/ppl": math.exp(train_loss) if train_loss < 709.78 else float("inf"),
-    # "train/ppl": math.exp(train_loss)
 
   }
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
     new_metrics["valid/ppl"] = math.exp(valid_loss) if valid_loss < 709.78 else float("inf")
-    # new_metrics["valid/ppl"] = math.exp(valid_loss)
 
   # Add gradient norms if requested
   if cfg.track_grad_norm:
@@ -304,9 +281,6 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   # Add LN weights metrics if requested
   if cfg.track_ln_weights:
     new_metrics.update(get_ln_param_stats(model))
-  
-  if cfg.track_block_grad_similarity:
-    new_metrics.update(get_block_grad_similarity(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)

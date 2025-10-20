@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, DyT, RMSNorm, MLP, GLU, MLPReluSquared, GainOnly, DetachNorm, RMSNorm_Simple
+from .components import LayerNorm, LayerNorm_Simple, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -24,7 +24,6 @@ class ModelConfig:
     attn_style: str
     drop_which_ln: int
     ln_use_shift: bool = False
-    dyt_alpha_init: float = 0.5
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
@@ -42,40 +41,29 @@ MLP_CLASSES = {
 def _get_ln_variant(cfg, dim=None):
     if dim==None:
         dim = cfg.dim
-
-    if cfg.ln_style == 'LayerNorm':
+    style = cfg.ln_style.lower()
+    if style == 'layernorm':
         return LayerNorm(dim, bias=cfg.ln_use_shift)
-    elif cfg.ln_style == 'LayerNorm_Simple':
+    elif style == 'layernorm_simple':
         return LayerNorm_Simple(dim)
-    elif cfg.ln_style == 'DyT':
-        return DyT(dim, alpha_init_value=cfg.dyt_alpha_init, bias=cfg.ln_use_shift)
-    elif cfg.ln_style == 'RMSNorm':
+    elif style == 'rmsnorm':
         return RMSNorm(dim, cfg.rmsorm_eps)
-    elif cfg.ln_style == 'RMSNorm_Simple':
-        return RMSNorm_Simple(dim, cfg.rmsorm_eps)
-    elif cfg.ln_style == 'GainOnly':
-        return GainOnly(dim, bias=cfg.ln_use_shift)
-    elif cfg.ln_style == 'DetachNorm':
+    elif style == 'onlyaffine':
+        return OnlyAffine(dim, bias=cfg.ln_use_shift)
+    elif style == 'detachnorm':
         return DetachNorm(dim, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'DyT', 'RMSNorm', 'GainOnly', 'DetachNorm', 'RMSNorm_Simple'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
 
 
 def _get_attn(cfg):
-    if cfg.attn_style == 'Default':
+    style = cfg.attn_style.lower()
+    if style == 'default':
         return Attention(cfg)
-    elif cfg.attn_style == 'QKNorm':
+    elif style == 'qknorm':
         return QKNormAttention(cfg)
-    elif cfg.attn_style == 'QK-LN':
-        return QKLNAttention(cfg)
-    elif cfg.attn_style == 'QK-RMSNorm':
-        return QKRMSNormAttention(cfg)
-    elif cfg.attn_style == 'QKGainOnly':
-        return QKGainOnly(cfg)
-    elif cfg.attn_style == 'QKNormOnly':
-        return QKNormOnly(cfg)
     else:
-        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm', 'QK-LN', 'QK-RMSNorm', 'QKGainOnly', 'QKNormOnly'")
+        raise ValueError("Invalid cfg.attn_style value. Choose from 'Default', 'QKNorm'")
         
 
 def _scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
@@ -190,158 +178,9 @@ class QKNormAttention(Attention):
         out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
 
         return self.w_out(out)
-    
-
-class QKLNAttention(Attention):
-    """QKNorm Attention, but using LN on the queries and keys, and no scalar temperature"""
-    def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg)
-
-        self.qk_norm = LayerNorm(dim=self.head_dim, bias=cfg.ln_use_shift)  # LN across the head dimension
 
 
-    def forward(self, x, freqs_cis):
-        bsz, seqlen, d = x.shape
-        
-        q, k, v = self.w_qkv(x).split(d, dim=2)
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
-        
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
-
-        q = self.qk_norm(q)  # LN instead of l2 norm
-        k = self.qk_norm(k)  # LN instead of l2 norm
-        
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)  # use fixed 1/d scale, no temperature
-        else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)   # use fixed 1/d scale, no temperature
-            self.entropy_sum.add_(sum_ent.detach())
-            self.entropy_count.add_(n)
-        
-        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
-
-        return self.w_out(out)
-
-class QKRMSNormAttention(Attention):
-    """QKNorm Attention, but using RMSNorm on the queries and keys, and no scalar temperature"""
-    def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg)
-
-        self.qk_norm = RMSNorm(dim=self.head_dim)  # RMSNorm across the head dimension
-
-        g0 = math.log2(cfg.qknorm_L97 * cfg.qknorm_L97 - cfg.qknorm_L97)  # ABLATION: QKRMSNorm with QKNorm temperature init
-        g0 = math.sqrt(g0)  # Note a*(u dot v) = (sqrt(a)*u) dot (sqrt(a)*v)
-        with torch.no_grad():
-            self.qk_norm.weight.data.mul_(g0)
-
-    def forward(self, x, freqs_cis):
-        bsz, seqlen, d = x.shape
-        
-        q, k, v = self.w_qkv(x).split(d, dim=2)
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
-        
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
-
-        q = self.qk_norm(q)  # RMSNorm instead of l2 norm
-        k = self.qk_norm(k)  # RMSNorm instead of l2 norm
-        
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)  # use fixed 1/d scale, no scalar temperature
-        else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1/self.head_dim, is_causal=True)   # use fixed 1/d scale, no scalar temperature
-            self.entropy_sum.add_(sum_ent.detach())
-            self.entropy_count.add_(n)
-        
-        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
-
-        return self.w_out(out)
-
-
-class QKGainOnly(Attention):
-    """QKNorm Ablation: Dropping normalisation"""
-    def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg)
-
-        g0 = math.log2(cfg.qknorm_L97 * cfg.qknorm_L97 - cfg.qknorm_L97)  # Initialise temperature
-        self.g = nn.Parameter(torch.tensor(g0))
-
-
-    def forward(self, x, freqs_cis):
-        bsz, seqlen, d = x.shape
-        
-        q, k, v = self.w_qkv(x).split(d, dim=2)
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
-        
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
-
-        q = q * self.g  # Apply temperature. Note that (q*g)k^T =  g*(qk^T)
-        
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
-        else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
-            self.entropy_sum.add_(sum_ent.detach())
-            self.entropy_count.add_(n)
-        
-        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
-
-        return self.w_out(out)
-
-
-class QKNormOnly(Attention):
-    """QKNorm Ablation: Dropping temperature"""
-    def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg)
-
-
-    def forward(self, x, freqs_cis):
-        bsz, seqlen, d = x.shape
-        
-        q, k, v = self.w_qkv(x).split(d, dim=2)
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
-        
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
-
-        q = q / (q.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension
-        k = k / (k.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension
-        
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        if not self.track_entropy:
-            out = F.scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)  # temperature is already applied, deactivate default 1/sqrt(d) scaling
-        else:
-            out, sum_ent, n = _scaled_dot_product_attention(q, k, v, scale=1, is_causal=True)   # temperature is already applied, deactivate default 1/sqrt(d) scaling
-            self.entropy_sum.add_(sum_ent.detach())
-            self.entropy_count.add_(n)
-        
-        out = out.transpose(1, 2).contiguous().view(bsz, seqlen, d)
-
-        return self.w_out(out)
-
-
-class Block_NoLN(nn.Module):
+class Block_NoNorm(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = _get_attn(cfg)
@@ -355,21 +194,7 @@ class Block_NoLN(nn.Module):
         return x 
 
 
-class Block_NoLN_Reparam(nn.Module):
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.layer_id = layer_id
-        self.res_scale = 1 / math.sqrt(2 * cfg.n_layers)
-
-    def forward(self, x, freqs_cis):
-        x = x + self.res_scale * self.attn(x, freqs_cis)
-        x = x + self.res_scale * self.mlp(x)
-        return x
-
-
-class Block_OnlyAttnPreLN(nn.Module):
+class Block_PreAttnNorm(nn.Module):
     """ABLATION: In pre-LN, drop MLP norm"""
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -385,7 +210,7 @@ class Block_OnlyAttnPreLN(nn.Module):
         return x
 
 
-class Block_OnlyMLPPreLN(nn.Module):
+class Block_PreGLUNorm(nn.Module):
     """ABLATION: In pre-LN, drop Attn norm"""
 
     def __init__(self, layer_id: int, cfg: ModelConfig):
@@ -402,7 +227,7 @@ class Block_OnlyMLPPreLN(nn.Module):
         return x
 
 
-class Block_OnlyAttnPostLN(nn.Module):
+class Block_PostAttnNorm(nn.Module):
     """ABLATION: In post-LN, drop MLP norm"""
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -418,7 +243,7 @@ class Block_OnlyAttnPostLN(nn.Module):
         return x
 
 
-class Block_OnlyMLPPostLN(nn.Module):
+class Block_PostGLUNorm(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = _get_attn(cfg)
@@ -433,40 +258,7 @@ class Block_OnlyMLPPostLN(nn.Module):
         return x
 
 
-class Block_ReZero(nn.Module):
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.attn_resweight = nn.Parameter(torch.Tensor([0]))
-        self.mlp_resweight = nn.Parameter(torch.Tensor([0]))
-        self.layer_id = layer_id
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = x + self.attn_resweight * self.attn(x, freqs_cis)
-        x = x + self.mlp_resweight * self.mlp(x)
-        return x    
-
-
-class Block_DeepNorm(nn.Module):
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.attn_norm = _get_ln_variant(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = _get_ln_variant(cfg)
-        self.layer_id = layer_id
-        self.alpha = (2* cfg.n_layers)**(1/4)
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = self.attn_norm(self.alpha * x + self.attn(x, freqs_cis))
-        x = self.mlp_norm(self.alpha * x + self.mlp(x))
-        return x
-
-
-class Block_LN(nn.Module):
+class NormBlock(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = _get_attn(cfg)
@@ -476,7 +268,7 @@ class Block_LN(nn.Module):
         self.layer_id = layer_id
 
 
-class Block_PreLN(Block_LN):
+class Block_PreNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         x = x + self.attn(self.attn_norm(x), freqs_cis)
@@ -484,7 +276,7 @@ class Block_PreLN(Block_LN):
         return x
     
 
-class Block_PostLN(Block_LN):
+class Block_PostNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         x = self.attn_norm(x + self.attn(x, freqs_cis))
@@ -495,50 +287,44 @@ class Block_PostLN(Block_LN):
 class Transformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.weight_init = cfg.weight_init
+        self.weight_init = cfg.weight_init.lower()
         self.n_layers = cfg.n_layers
         self.dim = cfg.dim
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
         self.out_norm = None
-        self.ln_config = cfg.ln_config
-        if cfg.ln_config == 'pre-LN':  # Use pre-LN blocks and out_norm
-            self.layers = nn.ModuleList([Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        ln_config = cfg.ln_config.lower()
+        if ln_config == 'pre-norm':
+            self.layers = nn.ModuleList([Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
-        elif cfg.ln_config == 'post-LN':  # Use post-LN blocks
-            self.layers = nn.ModuleList([Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'mix-LN':  # Use partly post-LN and partly pre-LN based on a ratio parameter, followed by out_norm. Post-LN first.
-            self.layers = nn.ModuleList([Block_PostLN(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
-                                         else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'post-norm':
+            self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'mix-norm':  # Use partly pre-norm and partly post-norm based on a ratio parameter, followed by out_norm
+            self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
+                                         else Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
-        elif cfg.ln_config == 'ReZero':  # Use ReZero blocks without any norm
-            self.layers = nn.ModuleList([Block_ReZero(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'DeepNorm':
-            self.layers = nn.ModuleList([Block_DeepNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'OnlyAttnPreLN':  # ABLATION
-            self.layers = nn.ModuleList([Block_OnlyAttnPreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'pre-attn-norm':  # ABLATION
+            self.layers = nn.ModuleList([Block_PreAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
-        elif cfg.ln_config == 'OnlyMLPPreLN':  # ABLATION
-            self.layers = nn.ModuleList([Block_OnlyMLPPreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'pre-glu-norm':  # ABLATION
+            self.layers = nn.ModuleList([Block_PreGLUNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
-        elif cfg.ln_config == 'OnlyAttnPostLN':  # ABLATION
-            self.layers = nn.ModuleList([Block_OnlyAttnPostLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'OnlyMLPPostLN':  # ABLATION
-            self.layers = nn.ModuleList([Block_OnlyMLPPostLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'pre-LN-drop':  # ABLATION: Drop norm only in specific layer
-            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
-                                        else Block_PreLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'post-attn-norm':  # ABLATION
+            self.layers = nn.ModuleList([Block_PostAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'post-glu-norm':  # ABLATION
+            self.layers = nn.ModuleList([Block_PostGLUNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'pre-norm-drop':  # ABLATION: Drop norm only in specific layer
+            self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) if idx==cfg.drop_which_ln
+                                        else Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = None if cfg.drop_which_ln == -1 else _get_ln_variant(cfg)
-        elif cfg.ln_config == 'post-LN-drop': # ABLATION: Drop norm only in specific layer
-            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) if idx==cfg.drop_which_ln
-                                        else Block_PostLN(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'No-LN-reparam':
-            self.layers = nn.ModuleList([Block_NoLN_Reparam(idx, cfg) for idx in range(cfg.n_layers)])
-        elif cfg.ln_config == 'No-LN':
-            self.layers = nn.ModuleList([Block_NoLN(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'post-norm-drop': # ABLATION: Drop norm only in specific layer
+            self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) if idx==cfg.drop_which_ln
+                                        else Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'no-norm':
+            self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'No-LN', 'pre-LN', 'post-LN', 'mix-LN', 'ReZero', 'DeepNorm', 'OnlyAttnPreLN', 'OnlyMLPPreLN', 'OnlyAttnPostLN', 'OnlyMLPPostLN', 'pre-LN-drop', 'post-LN-drop', 'pre-LN-stripped', 'post-LN-stripped'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'mix-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -561,55 +347,41 @@ class Transformer(nn.Module):
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
-        if self.weight_init == 'Default' or self.weight_init == 'Default_Reparam':
+        if self.weight_init in ('gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'):
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif self.weight_init == 'Xavier':
+        elif self.weight_init in ('xavier_res-scale', 'xavier_no-scale'):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif self.weight_init == 'DeepNorm':
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_normal_(module.weight, gain=1.0)
-                if module.bias is not None:
-                    torch.nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Embedding):  # DeepNet doesn't specify embedding initialisation, so we keep the default init
-                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif self.weight_init == 'T-Fixup':
+        elif self.weight_init == 't-fixup':
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
+        else:
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'xavier_res-scale', 'xavier_no-scale', 't-fixup', 'gpt2_glu-scale', 'gpt2_attn_scale'")
 
     def _scale_residual_branches(self):
-        if self.weight_init in ('Default', 'Xavier'):
+        if self.weight_init in ('gpt2_res-scale', 'xavier_res-scale'):
             with torch.no_grad():
                 for n, p in self.named_parameters():
                     if n.endswith('fc2.weight'): # mlp/glu output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
                     if n.endswith('w_out.weight'): # attn output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
-        elif self.weight_init == 'Default_Reparam':
-            return  # no res scale at initialisation, instead applied in each forward
-        elif self.weight_init == 'DeepNorm':
-            with torch.no_grad():
-                beta = (8*self.n_layers)**(-1/4)
-                d = self.dim
-                for n, p in self.named_parameters():
-                    if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight"):
-                        p.mul_(beta)
-                    if n.endswith("w_qkv.weight"):
-                        p[2*d:3*d, :].mul_(beta)  # isolate and rescale only the value projection
-        elif self.weight_init == 'T-Fixup':
+        elif self.weight_init in ('gpt2_no-scale', 'xavier_no-scale'):
+            return  # no residual scaling at initialisation
+        elif self.weight_init == 't-fixup':
             with torch.no_grad():
                 t_fixup_scalar = (6 * self.n_layers)**(-1/4)  # derived from L_d=2N, as compared to the encoder-decoder case where L_d=3N
                 d = self.dim
@@ -618,6 +390,17 @@ class Transformer(nn.Module):
                         p.mul_(t_fixup_scalar)
                     if n.endswith("w_qkv.weight"):
                         p[2*d:3*d, :].mul_(t_fixup_scalar)  # rescale only the value projection
+        elif self.weight_init == 'gpt2_glu-scale':
+            with torch.no_grad():
+                for n, p in self.named_parameters():
+                    if n.endswith('fc2.weight'): # mlp/glu output layer
+                        p.mul_(1/math.sqrt(2 * self.n_layers))
+        elif self.weight_init == 'gpt2_attn-scale':
+            with torch.no_grad():
+                for n, p in self.named_parameters():
+                    if n.endswith('w_out.weight'): # attn output layer
+                        p.mul_(1/math.sqrt(2 * self.n_layers))
+
 
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight
