@@ -11,6 +11,7 @@ import torchvision.transforms as transforms
 
 import os
 import argparse
+import json
 import random
 import numpy as np
 import wandb
@@ -18,6 +19,7 @@ import wandb
 import models 
 
 from utils import progress_bar
+from pathlib import Path
 from dataclasses import asdict
 
 LOG_EVERY_BATCH = False  # For fine-grained analysis or debugging
@@ -70,6 +72,7 @@ def get_ln_param_stats(model):
 
 # Args
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+parser.add_argument('--config', required=True, type=str, help='path to JSON config file for model')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
@@ -121,35 +124,32 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 
 
 # Model
-print('==> Building model..')
+print('==> Building model from config..')
+with open(args.config, 'r') as f:
+    cfg_dict = json.load(f)
 
-# net_cfg = models.CNNConfig(
-#     n_blocks = 4,
-#     norm_config = "no-norm",      # Choose from "pre-norm", "post-norm", "no-norm".
-#     norm_variant = "LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
-#     use_res_scale = False,
-#     use_gain = True,
-#     use_bias = True,
-#     norm_eps = 1e-6
-# )
-# net = models.NormCNN(net_cfg)
-
-net_cfg = models.MLPConfig(
-    n_layers=8,
-    norm_config="pre-norm",     # Choose from "pre-norm", "post-norm", "no-norm". If use_residual=False, "pre-norm"="post-norm"
-    norm_variant="LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
-    use_res_scale=False,
-    use_gain=True,
-    use_bias=True,
-    norm_eps=1e-6,
-    use_residual=True,          # True -> Residual blocks; False -> FFN
-    use_relu=True
-)
-net = models.NormMLP(net_cfg)
-
-init_wandb(net_cfg, 'PreNormResidual_8L_sanitycheck')
+arch = cfg_dict.get("arch", "").lower()
+if arch == "cnn":
+    # everything except the model class is passed to the dataclass
+    cfg_dict_no_arch = {k: v for k, v in cfg_dict.items() if k != "arch"}
+    net_cfg = models.CNNConfig(**cfg_dict_no_arch)
+    net = models.NormCNN(net_cfg)
+elif arch == "mlp":
+    cfg_dict_no_arch = {k: v for k, v in cfg_dict.items() if k != "arch"}
+    net_cfg = models.MLPConfig(**cfg_dict_no_arch)
+    net = models.NormMLP(net_cfg)
+else:
+    raise ValueError(f"Unsupported or missing 'arch' in config: {cfg_dict.get('arch')}")
 
 
+# Init wandb
+run_name = Path(args.config).name
+if run_name.endswith(".json"):
+    run_name = run_name[:-5]
+init_wandb(net_cfg, run_name + "_SGD")
+
+
+# Optimisation setup
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -167,6 +167,13 @@ if args.resume:
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
+# optimizer = torch.optim.AdamW(
+#   net.parameters(),
+#   lr=args.lr,
+#   betas=[0.95, 0.95],
+#   weight_decay=0.1,
+#   fused=True, 
+# )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
 
