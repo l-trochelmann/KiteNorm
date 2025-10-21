@@ -293,7 +293,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     print(msg)
   
   if cfg.use_wandb:
-    wandb.log(new_metrics)
+    wandb.log(new_metrics, step=new_metrics["step"])
 
 
 def print_master(msg):

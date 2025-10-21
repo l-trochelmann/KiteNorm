@@ -42,7 +42,8 @@ def main(_):
   
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
-  
+
+
   # Initialise model update tracking:
   if not cfg.track_model_update:
     probe_inputs = None
@@ -63,9 +64,10 @@ def main(_):
   print_master("=== Start Training! ===")
   metrics = defaultdict(list)
   train_losses = []
-  
+
   for micro_step, micro_batch in enumerate(trainloader, micro_step_start+1):
     step = micro_step // cfg.grad_accumulation_steps
+    just_updated = (micro_step % cfg.grad_accumulation_steps == 0)
     if step > cfg.steps_budget:
       break
 
@@ -75,7 +77,7 @@ def main(_):
 
     # Eval
     valid_loss = None
-    if cfg.eval and step % cfg.eval_every_steps == 0:
+    if cfg.eval and just_updated and (step % cfg.eval_every_steps == 0):
       print_master("Evaluating on validation set")
       if cfg.track_softmax:
         for layer in model.layers:
@@ -87,7 +89,7 @@ def main(_):
         valid_loss = engine.eval(validloader)
 
     # Log
-    if step % cfg.log_every_steps == 0:
+    if just_updated and (step % cfg.log_every_steps == 0):
       if master_process:
         utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
                   probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
