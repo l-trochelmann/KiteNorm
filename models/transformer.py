@@ -27,7 +27,6 @@ class ModelConfig:
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
-    mixLN_ratio: float = 0.25
     qknorm_L97: int = 2024
 
 
@@ -300,10 +299,6 @@ class Transformer(nn.Module):
             self.out_norm = _get_ln_variant(cfg)
         elif ln_config == 'post-norm':
             self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif ln_config == 'mix-norm':  # Use partly pre-norm and partly post-norm based on a ratio parameter, followed by out_norm
-            self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) if idx < math.floor(cfg.mixLN_ratio * cfg.n_layers)
-                                         else Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = _get_ln_variant(cfg)
         elif ln_config == 'pre-attn-norm':  # ABLATION
             self.layers = nn.ModuleList([Block_PreAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
@@ -324,7 +319,7 @@ class Transformer(nn.Module):
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'mix-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
