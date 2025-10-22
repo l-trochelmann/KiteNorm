@@ -141,13 +141,7 @@ else:
 
 # Init wandb
 run_name = Path(args.config).stem
-if opt_name == "sgd":
-    run_suffix = "_SGD"
-elif opt_name =="adam":
-    run_suffix = "_Adam"
-else:
-    raise ValueError(f"Unsupported or missing 'optim' in config: {cfg_dict.get('optim')}")
-init_wandb(net_cfg, run_name + run_suffix)
+init_wandb(net_cfg, run_name)
 
 
 # Optimisation
