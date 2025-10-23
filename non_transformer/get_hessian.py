@@ -24,58 +24,6 @@ from PyHessian.pyhessian import hessian
 from dataclasses import asdict
 
 
-# PyHessian helpers
-"""
-def save_esd_plot(eigenvalues, weights, out_path):
-    eig = np.asarray(eigenvalues, dtype=float)
-    wts = np.asarray(weights, dtype=float)
-    density, grids = density_generate(eig, wts, sigma_squared=1e-6)
-
-    fig, ax = plt.subplots(figsize=(10, 3.5))
-    ax.semilogy(grids, density + 1e-7)
-    ax.set_xlabel("Eigenvalue", fontsize=12)
-    ax.set_ylabel("Density (log scale)", fontsize=12)
-    ax.tick_params(axis='both', labelsize=10)
-    ax.set_xlim(np.min(eig) - 1, np.max(eig) + 1)
-    fig.tight_layout()
-    fig.savefig(out_path)
-    plt.close(fig)
-    return out_path
-
-
-def density_generate(eigenvalues,
-                     weights,
-                     num_bins=10000,
-                     sigma_squared=1e-5,
-                     overhead=0.01):
-
-    eigenvalues = np.array(eigenvalues)
-    weights = np.array(weights)
-
-    lambda_max = np.mean(np.max(eigenvalues, axis=1), axis=0) + overhead
-    lambda_min = np.mean(np.min(eigenvalues, axis=1), axis=0) - overhead
-
-    grids = np.linspace(lambda_min, lambda_max, num=num_bins)
-    sigma = sigma_squared * max(1, (lambda_max - lambda_min))**2  # squared range, unlike original PyHessian code
-
-    num_runs = eigenvalues.shape[0]
-    density_output = np.zeros((num_runs, num_bins))
-
-    for i in range(num_runs):
-        for j in range(num_bins):
-            x = grids[j]
-            tmp_result = gaussian(eigenvalues[i, :], x, sigma)
-            density_output[i, j] = np.sum(tmp_result * weights[i, :])
-    density = np.mean(density_output, axis=0)
-    normalization = np.sum(density) * (grids[1] - grids[0])
-    density = density / normalization
-    return density, grids
-
-def gaussian(x, x0, sigma_squared):
-    return np.exp(-(x0 - x)**2 /
-                  (2.0 * sigma_squared)) / np.sqrt(2 * np.pi * sigma_squared)
-"""
-
 # Args
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--config', required=True, type=str, help='path to JSON config file for model')
@@ -196,19 +144,3 @@ with tempfile.TemporaryDirectory() as tmpd:
 wandb.finish()
 
 print("Hessian ESD data logged to W&B as an artifact.")
-
-
-"""
-out_dir = os.path.expanduser("~/LN-variants/results")
-out_path = os.path.join(out_dir, f"init_{MODEL_NAME}.pdf")
-out_pdf = save_esd_plot(density_eigen, density_weight, out_path=out_path)
-print(f"ESD plot saved to: {out_pdf}")
-"""
-
-"""
-import wandb, numpy as np
-api = wandb.Api()
-art = api.artifact("your-entity/LN-variants/hessian_esd-<MODEL_NAME>:latest")
-npz = np.load(art.download(root="artifacts") / f"init_<MODEL_NAME>.npz")
-# npz["eigs"], npz["wts"], npz["lambda_max"], ...
-"""
