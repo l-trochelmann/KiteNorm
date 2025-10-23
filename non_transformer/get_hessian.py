@@ -1,8 +1,6 @@
 '''Train CIFAR10 with PyTorch.'''
-from calendar import Calendar
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 
@@ -10,21 +8,24 @@ import torchvision
 import torchvision.transforms as transforms
 
 import os
+import tempfile
+import json
 import argparse
 import random
 import numpy as np
 import wandb
-import matplotlib
-import matplotlib.pyplot as plt
 
 import models 
-from PyHessian.pyhessian import hessian
-from PyHessian.density_plot import density_generate
 
-from utils import progress_bar
+from pathlib import Path
+from itertools import islice
+from PyHessian.pyhessian import hessian
+
 from dataclasses import asdict
 
 
+# PyHessian helpers
+"""
 def save_esd_plot(eigenvalues, weights, out_path):
     eig = np.asarray(eigenvalues, dtype=float)
     wts = np.asarray(weights, dtype=float)
@@ -42,8 +43,42 @@ def save_esd_plot(eigenvalues, weights, out_path):
     return out_path
 
 
+def density_generate(eigenvalues,
+                     weights,
+                     num_bins=10000,
+                     sigma_squared=1e-5,
+                     overhead=0.01):
+
+    eigenvalues = np.array(eigenvalues)
+    weights = np.array(weights)
+
+    lambda_max = np.mean(np.max(eigenvalues, axis=1), axis=0) + overhead
+    lambda_min = np.mean(np.min(eigenvalues, axis=1), axis=0) - overhead
+
+    grids = np.linspace(lambda_min, lambda_max, num=num_bins)
+    sigma = sigma_squared * max(1, (lambda_max - lambda_min))**2  # squared range, unlike original PyHessian code
+
+    num_runs = eigenvalues.shape[0]
+    density_output = np.zeros((num_runs, num_bins))
+
+    for i in range(num_runs):
+        for j in range(num_bins):
+            x = grids[j]
+            tmp_result = gaussian(eigenvalues[i, :], x, sigma)
+            density_output[i, j] = np.sum(tmp_result * weights[i, :])
+    density = np.mean(density_output, axis=0)
+    normalization = np.sum(density) * (grids[1] - grids[0])
+    density = density / normalization
+    return density, grids
+
+def gaussian(x, x0, sigma_squared):
+    return np.exp(-(x0 - x)**2 /
+                  (2.0 * sigma_squared)) / np.sqrt(2 * np.pi * sigma_squared)
+"""
+
 # Args
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+parser.add_argument('--config', required=True, type=str, help='path to JSON config file for model')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
@@ -94,53 +129,86 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
 
-# Model
-print('==> Building model..')
+# Model (match main.py interface)
+print('==> Building model from config..')
+with open(args.config, 'r') as f:
+    cfg_dict = json.load(f)
 
-net_cfg = models.CNNConfig(
-    n_blocks = 16,                 # blocks per stage, with 4 stages.
-    norm_config = "post-norm",      # Choose from "pre-norm", "post-norm", "no-norm".
-    norm_variant = "LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
-    use_res_scale = True,
-    use_gain = True,
-    use_bias = True,
-    norm_eps = 1e-6
-)
-net = models.NormCNN(net_cfg)
+arch = cfg_dict.get("arch", "").lower()
+opt_name = cfg_dict.get("optim", "").lower()
+cfg_model = {k: v for k, v in cfg_dict.items() if k not in ("arch", "optim")}
 
-# net_cfg = models.MLPConfig(
-#     n_layers=8,                   # total blocks
-#     norm_config="no-norm",     # Choose from "pre-norm", "post-norm", "no-norm". If use_residual=False, "pre-norm"="post-norm"
-#     norm_variant="LayerNorm",   # Choose from "LayerNorm", "RMSNorm"
-#     use_res_scale=True,
-#     use_gain=True,
-#     use_bias=True,
-#     norm_eps=1e-6,
-#     use_residual=True,          # True -> Residual blocks; False -> FFN
-#     use_relu=True
-# )
-# net = models.NormMLP(net_cfg)
+if arch == "cnn":
+    net_cfg = models.CNNConfig(**cfg_model)
+    net = models.NormCNN(net_cfg)
+elif arch == "mlp":
+    net_cfg = models.MLPConfig(**cfg_model)
+    net = models.NormMLP(net_cfg)
+else:
+    raise ValueError(f"Unsupported or missing 'arch' in config: {cfg_dict.get('arch')}")
 
-MODEL_NAME = "PostNormNet_4x16L_mid-low-sigma"
+# Derive an output name like main.py’s run_name
+MODEL_NAME = Path(args.config).stem
 
 net = net.to(device)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                      momentum=0.9, weight_decay=5e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
 
-# Hessian ESD at initialisation
+# Hessian ESD at initialisation over a subset of the training set
 net.eval()
+wandb.init(project="LN-variants", name=f"init-{MODEL_NAME}", config = asdict(net_cfg))
 
-probe_inputs, probe_targets = next(iter(trainloader)) # Take a single probe batch
-probe_inputs, probe_targets = probe_inputs.to(device), probe_targets.to(device)
+num_batches = 4  # Size of the subset
+train_subset = list(islice(trainloader, num_batches))
 
-hess_obj = hessian(net, criterion, (probe_inputs, probe_targets), cuda=(device == 'cuda'))
-density_eigen, density_weight = hess_obj.density(iter=100, n_v=10)
+hess_obj = hessian(net, criterion, dataloader=train_subset, cuda=(device == 'cuda'))
+iter_steps, n_v = 100, 10
+density_eigen, density_weight = hess_obj.density(iter=iter_steps, n_v=n_v)
 
+# also compute the maximum eigenvalue on the same subset
+max_eigs, _ = hess_obj.eigenvalues(maxIter=200, tol=1e-4, top_n=1)
+lambda_max = float(max_eigs[0])
+
+artifact = wandb.Artifact(f"hessian-esd_{MODEL_NAME}", type="hessian-esd")
+
+# pack everything into a single .npz (raw nodes/weights + metadata)
+with tempfile.TemporaryDirectory() as tmpd:
+    npz_path = os.path.join(tmpd, f"init_{MODEL_NAME}.npz")
+    np.savez_compressed(
+        npz_path,
+        eigs=np.asarray(density_eigen, dtype=float),
+        wts=np.abs(np.real_if_close(np.asarray(density_weight))),
+        lambda_max=lambda_max,
+        iter=iter_steps,
+        n_v=n_v,
+        sigma_squared=1e-6,   # keep whatever you used/plan to use for smoothing
+        overhead=0.01,
+        arch=arch,
+        model_name=MODEL_NAME,
+        seed=seed,
+        subset_batches=4
+    )
+    artifact.add_file(npz_path)
+
+    wandb.log_artifact(artifact)
+
+wandb.finish()
+
+print("Hessian ESD data logged to W&B as an artifact.")
+
+
+"""
 out_dir = os.path.expanduser("~/LN-variants/results")
 out_path = os.path.join(out_dir, f"init_{MODEL_NAME}.pdf")
 out_pdf = save_esd_plot(density_eigen, density_weight, out_path=out_path)
 print(f"ESD plot saved to: {out_pdf}")
+"""
+
+"""
+import wandb, numpy as np
+api = wandb.Api()
+art = api.artifact("your-entity/LN-variants/hessian_esd-<MODEL_NAME>:latest")
+npz = np.load(art.download(root="artifacts") / f"init_<MODEL_NAME>.npz")
+# npz["eigs"], npz["wts"], npz["lambda_max"], ...
+"""

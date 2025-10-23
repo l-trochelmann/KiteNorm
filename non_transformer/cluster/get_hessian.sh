@@ -9,8 +9,9 @@ conda activate ln-variants
 
 # Job specific vars
 echo "Assigning job variables"
-LR=$1
+config=$1
+LR=$2
 
 # Execute python script
-echo "Executing with lr=${LR}"
-python /home/ltrochelmann/LN-variants/non_transformer/get_hessian.py --lr $LR
+echo "Executing job script"
+python /home/ltrochelmann/LN-variants/non_transformer/get_hessian.py --config "$config" --lr $LR
