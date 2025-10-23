@@ -1,9 +1,8 @@
-
 # Executable should be a full path
 executable=/home/ltrochelmann/LN-variants/non_transformer/cluster/condor.sh
 
 # Hyperparmeters are specified in a YAML configuration file
-config=/home/ltrochelmann/LN-variants/non_transformer/config/CNN_post-norm_4x16L_no-scale.json
+config=/home/ltrochelmann/LN-variants/non_transformer/config/exp_depth_cnn/CNN_pre-norm_4x64L_res-scale.json
 
 # Pass arguments to the executable
 arguments  = $(config) $(lr)
@@ -15,51 +14,20 @@ output = $(LOGS_DIR)/out/job.$(Cluster).$(Process).out
 log = $(LOGS_DIR)/log/job.$(Cluster).$(Process).log
 
 # Job requirements
-request_memory = 250000
-request_cpus = 4
+request_memory = 16000
+request_cpus = 3
 request_gpus = 1
 requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Machine != "g147.internal.cluster.is.localnet") && (TARGET.Machine != "g132.internal.cluster.is.localnet")
 
-# single run
-# queue lr from (0.1)
-
-# low spectrum
-# queue lr from (
-#     0.0001
-#     0.0002
-#     0.0005
-#     0.001
-#     0.002
-# )
-
-# mid spectrum
 queue lr from (
+    0.0001
+    0.0002
     0.0005
     0.001
     0.002
     0.005
     0.01
+    0.02
+    0.05
+    0.1
 )
-
-# high spectrum
-# queue lr from (
-#     0.005
-#     0.01
-#     0.02
-#     0.05
-#     0.1
-# )
-
-# full spectrum
-# queue lr from (
-#     0.0001
-#     0.0002
-#     0.0005
-#     0.001
-#     0.002
-#     0.005
-#     0.01
-#     0.02
-#     0.05
-#     0.1
-# )
