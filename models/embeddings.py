@@ -12,7 +12,6 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, condense_ra
     return torch.stack([torch.cos(freqs)[None, :, None, :], torch.sin(freqs)[None, :, None, :]], dim=4)
 
 
-@torch.compile
 def apply_rotary_emb_complex_like(
     q: torch.Tensor, k: torch.Tensor, freqs_cis: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:

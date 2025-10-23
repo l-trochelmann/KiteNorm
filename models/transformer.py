@@ -28,6 +28,7 @@ class ModelConfig:
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
     qknorm_L97: int = 2024
+    compile: bool = True
 
 
 MLP_CLASSES = {
@@ -112,6 +113,11 @@ class Attention(nn.Module):
         self.track_entropy = False  # While True, all forwards will contribute to a running average of softmax entropy
         self.register_buffer("entropy_sum", torch.zeros(1))
         self.register_buffer("entropy_count", torch.zeros(1))
+
+        if cfg.compile:
+            self.rope = torch.compile(apply_rotary_emb_complex_like)
+        else:
+            self.rope = apply_rotary_emb_complex_like
     
     def forward(self, x, freqs_cis):
         bsz, seqlen, d = x.shape # (bsz, seqlen, d)
@@ -121,7 +127,7 @@ class Attention(nn.Module):
         k = k.view(bsz, seqlen, self.n_heads, self.head_dim) # (bsz, seqlen, nh, h_dim)
         v = v.view(bsz, seqlen, self.n_heads, self.head_dim) # (bsz, seqlen, nh, h_dim)
         
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis) # (bsz, seqlen, nh, h_dim)
+        q, k = self.rope(q, k, freqs_cis=freqs_cis) # (bsz, seqlen, nh, h_dim)
         
         q = q.transpose(1, 2) # (bsz, nh, seqlen, h_dim)
         k = k.transpose(1, 2) # (bsz, nh, seqlen, h_dim)
@@ -147,7 +153,6 @@ class QKNormAttention(Attention):
         g0 = math.log2(cfg.qknorm_L97 * cfg.qknorm_L97 - cfg.qknorm_L97)  # Initialise temperature
         self.g = nn.Parameter(torch.tensor(g0))
 
-
     def forward(self, x, freqs_cis):
         bsz, seqlen, d = x.shape
         
@@ -156,7 +161,7 @@ class QKNormAttention(Attention):
         k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
         v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
         
-        q, k = apply_rotary_emb_complex_like(q, k, freqs_cis=freqs_cis)
+        q, k = self.rope(q, k, freqs_cis=freqs_cis)
 
         q = q / (q.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension
         k = k / (k.norm(dim=-1, keepdim=True))  # l2 normalisation across the head dimension

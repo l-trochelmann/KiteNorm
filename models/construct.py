@@ -25,7 +25,8 @@ def construct_model(cfg):
       attn_style = cfg.attn_style,
       drop_which_ln = cfg.drop_which_ln,
       ln_use_shift = cfg.ln_use_shift,
-      qknorm_L97 = cfg.qknorm_L97
+      qknorm_L97 = cfg.qknorm_L97,
+      compile = cfg.torch_compile
     )
     model = Transformer(model_cfg)
     
