@@ -130,9 +130,6 @@ class TorchEngine(torch.nn.Module):
       # step the optimizer, step the scaler if training in fp16
       self.scaler.step(self.optimizer)
       self.scaler.update()
-
-      # flush the gradients
-      self.optimizer.zero_grad(set_to_none=True) 
       
       # step the scheduler
       if self.scheduler:

@@ -95,6 +95,10 @@ def main(_):
                   probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
       train_losses = []
 
+    # Flush the gradients
+    if just_updated:
+      engine.optimizer.zero_grad(set_to_none=True) 
+
     # Checkpoint
     if master_process and cfg.save_intermediate_checkpoints \
         and micro_step % cfg.save_every_steps == 0:
