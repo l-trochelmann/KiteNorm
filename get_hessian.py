@@ -55,7 +55,7 @@ def main(_):
           layer.attn.track_entropy = True
 
   # Select training data subset
-  subset_batches = 8  # With half batch-size, means 4 batches of 1024 seq_len
+  subset_batches = cfg.esd_batches  # 128 samples with 1024 seq_len
   subset = []
   it = iter(trainloader)
   for _ in range(subset_batches):
