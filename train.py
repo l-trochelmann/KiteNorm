@@ -89,7 +89,7 @@ def main(_):
         valid_loss = engine.eval(validloader)
 
     # Log
-    if just_updated and (step % cfg.log_every_steps == 0):
+    if just_updated and (step == 1 or step % cfg.log_every_steps == 0):
       if master_process:
         utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
                   probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
