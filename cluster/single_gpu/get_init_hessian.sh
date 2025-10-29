@@ -14,4 +14,4 @@ job_idx=$2 # CONDOR job arrays range from 0 to n-1
 
 # Execute python script
 echo "Executing job script"
-python /home/ltrochelmann/LN-variants/get_hessian.py --config=$config --job_idx=$job_idx
+python /home/ltrochelmann/LN-variants/get_init_hessian.py --config=$config --job_idx=$job_idx
