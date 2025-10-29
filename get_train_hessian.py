@@ -46,8 +46,8 @@ def main(_):
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
 
   # === Train for exactly 256 optimizer updates (not micro-steps) ===
-  print_master("=== Training for exactly 256 steps (no eval/logging) ===")
-  updates_target = 256  # A step in the convergent phase
+  print_master("=== Training (no eval/logging) ===")
+  updates_target = 512  # Hessian ESD is computed after this step.
   updates_done = 0
   micro_step = micro_step_start
   train_iter = iter(trainloader)
