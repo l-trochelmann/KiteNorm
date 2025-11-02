@@ -23,7 +23,6 @@ def construct_model(cfg):
       ln_config = cfg.ln_config,
       ln_style = cfg.ln_style,
       attn_style = cfg.attn_style,
-      drop_which_ln = cfg.drop_which_ln,
       ln_use_shift = cfg.ln_use_shift,
       qknorm_L97 = cfg.qknorm_L97,
       compile = cfg.torch_compile

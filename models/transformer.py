@@ -22,7 +22,6 @@ class ModelConfig:
     ln_config: str
     ln_style: str
     attn_style: str
-    drop_which_ln: int
     ln_use_shift: bool = False
     mlp: str = 'mlp'
     rmsorm_eps: float = 1e-6
@@ -314,17 +313,10 @@ class Transformer(nn.Module):
             self.layers = nn.ModuleList([Block_PostAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'post-glu-norm':  # ABLATION
             self.layers = nn.ModuleList([Block_PostGLUNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif ln_config == 'pre-norm-drop':  # ABLATION: Drop norm only in specific layer
-            self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) if idx==cfg.drop_which_ln
-                                        else Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = None if cfg.drop_which_ln == -1 else _get_ln_variant(cfg)
-        elif ln_config == 'post-norm-drop': # ABLATION: Drop norm only in specific layer
-            self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) if idx==cfg.drop_which_ln
-                                        else Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -354,42 +346,19 @@ class Transformer(nn.Module):
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif self.weight_init in ('xavier_res-scale', 'xavier_no-scale'):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
-                if module.bias is not None:
-                    torch.nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Embedding):
-                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif self.weight_init == 't-fixup':
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight, gain=1.0)
-                if module.bias is not None:
-                    torch.nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Embedding):
-                torch.nn.init.normal_(module.weight, mean=0.0, std=self.dim**(-1/2))
         else:
-            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'xavier_res-scale', 'xavier_no-scale', 't-fixup', 'gpt2_glu-scale', 'gpt2_attn_scale'")
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'")
 
     def _scale_residual_branches(self):
-        if self.weight_init in ('gpt2_res-scale', 'xavier_res-scale'):
+        if self.weight_init in ('gpt2_res-scale'):
             with torch.no_grad():
                 for n, p in self.named_parameters():
                     if n.endswith('fc2.weight'): # mlp/glu output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
                     if n.endswith('w_out.weight'): # attn output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
-        elif self.weight_init in ('gpt2_no-scale', 'xavier_no-scale'):
+        elif self.weight_init in ('gpt2_no-scale'):
             return  # no residual scaling at initialisation
-        elif self.weight_init == 't-fixup':
-            with torch.no_grad():
-                t_fixup_scalar = (6 * self.n_layers)**(-1/4)  # derived from L_d=2N, as compared to the encoder-decoder case where L_d=3N
-                d = self.dim
-                for n, p in self.named_parameters():
-                    if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight") or n.endswith("embed_tokens.weight"):
-                        p.mul_(t_fixup_scalar)
-                    if n.endswith("w_qkv.weight"):
-                        p[2*d:3*d, :].mul_(t_fixup_scalar)  # rescale only the value projection
         elif self.weight_init == 'gpt2_glu-scale':
             with torch.no_grad():
                 for n, p in self.named_parameters():
@@ -400,7 +369,8 @@ class Transformer(nn.Module):
                 for n, p in self.named_parameters():
                     if n.endswith('w_out.weight'): # attn output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
-
+        else:
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'")
 
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight
