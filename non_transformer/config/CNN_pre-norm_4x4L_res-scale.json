@@ -1,0 +1,12 @@
+{
+  "arch": "cnn",
+  "n_blocks": 4,
+  "norm_config": "pre-norm",
+  "norm_variant": "LayerNorm",
+  "use_res_scale": true,
+  "use_gain": true,
+  "use_bias": true,
+  "norm_eps": 1e-6,
+  "optim": "sgd"
+}
+

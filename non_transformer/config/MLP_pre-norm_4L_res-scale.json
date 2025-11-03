@@ -1,0 +1,14 @@
+{
+  "arch": "mlp",
+  "n_layers": 4,
+  "norm_config": "pre-norm",
+  "norm_variant": "LayerNorm",
+  "use_res_scale": true,
+  "use_gain": true,
+  "use_bias": true,
+  "norm_eps": 1e-6,
+  "use_residual": true,
+  "use_relu": true,
+  "optim": "sgd"
+}
+  
