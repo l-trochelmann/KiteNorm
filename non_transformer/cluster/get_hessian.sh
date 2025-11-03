@@ -14,4 +14,4 @@ LR=$2
 
 # Execute python script
 echo "Executing job script"
-python /home/ltrochelmann/LN-variants/non_transformer/get_hessian.py --config "$config" --lr $LR
+python /home/ltrochelmann/LN-variants/non_transformer/get_init_hessian.py --config "$config" --lr $LR
