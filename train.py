@@ -60,6 +60,11 @@ def main(_):
   else:
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
 
+  # Ensure valid hidden state tracking:
+  if cfg.track_hidden_variance:
+    if not cfg.ln_config in ('pre-norm', 'post-norm'):
+      raise NotImplementedError("When cfg.track_hidden_variance is True, ln_config must be either 'pre-norm' or 'post-norm'")
+
   # Training
   print_master("=== Start Training! ===")
   metrics = defaultdict(list)
@@ -77,23 +82,33 @@ def main(_):
 
     # Eval
     valid_loss = None
-    if cfg.eval and just_updated and (step % cfg.eval_every_steps == 0):
+    if cfg.eval and ((just_updated and step % cfg.eval_every_steps == 0) or micro_step==1):
       print_master("Evaluating on validation set")
-      if cfg.track_softmax:
+      if cfg.track_softmax:  # Enable running average for eval
         for layer in model.layers:
           layer.attn.track_entropy = True
-        valid_loss = engine.eval(validloader)
+      if cfg.track_hidden_variance:
+        for layer in model.layers:
+          layer.attn_norm.track_variance = True
+          layer.mlp_norm.track_variance = True
+
+      valid_loss = engine.eval(validloader)  # Run eval
+
+      if cfg.track_softmax:  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
-      else:
-        valid_loss = engine.eval(validloader)
+      if cfg.track_hidden_variance:
+        for layer in model.layers:
+          layer.attn_norm.track_variance = False
+          layer.mlp_norm.track_variance = False
 
     # Log
-    if just_updated and (step == 1 or step % cfg.log_every_steps == 0):
+    if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
       if master_process:
         utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
                   probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
-      train_losses = []
+      if micro_step != 1:
+        train_losses = []
 
     # Flush the gradients
     if just_updated:
@@ -104,10 +119,33 @@ def main(_):
         and micro_step % cfg.save_every_steps == 0:
       save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 
-  # End of training: log and save checkpoint
+  # End of training: final eval, log and save checkpoint
   print_master(f"=== Training Completed! ===")
-  if master_process and cfg.save_last_checkpoint:
-    save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
+  if master_process:
+    if cfg.eval:
+      print_master("Evaluating on validation set (final)")
+      if cfg.track_softmax:  # Enable running average for eval
+        for layer in model.layers:
+          layer.attn.track_entropy = True
+      if cfg.track_hidden_variance:
+        for layer in model.layers:
+          layer.attn_norm.track_variance = True
+          layer.mlp_norm.track_variance = True
+
+      valid_loss = engine.eval(validloader)  # Run eval
+
+      if cfg.track_softmax:  # Disable running average after eval
+        for layer in model.layers:
+          layer.attn.track_entropy = False
+      if cfg.track_hidden_variance:
+        for layer in model.layers:
+          layer.attn_norm.track_variance = False
+          layer.mlp_norm.track_variance = False
+
+    utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
+              probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
+    if cfg.save_last_checkpoint:
+      save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 
   print_master(f"=== Terminating... ===")
 

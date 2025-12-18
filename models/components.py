@@ -10,8 +10,26 @@ class LayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
 
+        self.track_variance = False  # While True, keeps a running average over the input variance
+        self.register_buffer("running_var_sum", torch.zeros(1))
+        self.register_buffer("running_count", torch.zeros(1))
+        self.eps = 1e-6
+
     def forward(self, input):
-        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-6)
+        mean = input.mean(dim=-1, keepdim=True)
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+    
+        if self.track_variance:
+            current_var = var.float().detach().mean().item()
+            self.running_var_sum += current_var
+            self.running_count += 1
+    
+        y = (input - mean) * torch.rsqrt(var + self.eps)
+    
+        if self.bias is None:
+            return y * self.weight
+        else:
+            return y * self.weight + self.bias
 
 
 class LayerNorm_Simple(nn.Module):

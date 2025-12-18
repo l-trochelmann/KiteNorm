@@ -233,6 +233,27 @@ def get_ln_param_stats(model):
 
   return ln_param_stats
 
+def get_hidden_variance(model):
+  """Retrieves the mean hidden state variance before normalisation for each normalisation instance.
+
+  Returns:
+      dict: A ditionary mapping layer indices to respective hidden state variance before normalisation 
+  """
+  hidden_variances = {}
+  model.eval()
+  for layer in model.layers:
+    layer_attn_var = layer.attn_norm.running_var_sum / layer.attn_norm.running_count
+    layer_mlp_var = layer.mlp_norm.running_var_sum / layer.mlp_norm.running_count
+    hidden_variances[f"hidden_variance_attn-norm/{layer.layer_id}"] = layer_attn_var.item()
+    hidden_variances[f"hidden_variance_mlp-norm/{layer.layer_id}"] = layer_mlp_var.item()
+
+    layer.attn_norm.running_var_sum.zero_()  # Reset running average before the next val pass
+    layer.attn_norm.running_count.zero_()  # Reset running average before the next val pass
+    layer.mlp_norm.running_var_sum.zero_()  # Reset running average before the next val pass
+    layer.mlp_norm.running_count.zero_()  # Reset running average before the next val pass
+
+  return hidden_variances
+
 
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
@@ -278,9 +299,13 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   if cfg.track_softmax and valid_loss is not None:
     new_metrics.update(get_softmax_entropy(model))
 
-  # Add LN weights metrics if requested
+  # Add LN weights metrics if requestedx
   if cfg.track_ln_weights:
     new_metrics.update(get_ln_param_stats(model))
+
+  # Add hidden state variance metrics if requested, only following a validation pass
+  if cfg.track_hidden_variance and valid_loss is not None:
+    new_metrics.update(get_hidden_variance(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
@@ -293,7 +318,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     print(msg)
   
   if cfg.use_wandb:
-    wandb.log(new_metrics, step=new_metrics["step"])
+    wandb.log(new_metrics, step=new_metrics["micro_step"])
 
 
 def print_master(msg):
