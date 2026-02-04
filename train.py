@@ -61,9 +61,12 @@ def main(_):
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
 
   # Ensure valid hidden state tracking:
-  if cfg.track_hidden_variance:
+  if cfg.track_normalisation_variance:
     if not cfg.ln_config in ('pre-norm', 'post-norm'):
-      raise NotImplementedError("When cfg.track_hidden_variance is True, ln_config must be either 'pre-norm' or 'post-norm'")
+      raise NotImplementedError("When cfg.track_normalisation_variance is True, ln_config must be either 'pre-norm' or 'post-norm'")
+  if cfg.track_sublayer_variance:
+    probe_batch = next(iter(trainloader))
+    probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
 
   # Training
   print_master("=== Start Training! ===")
@@ -87,7 +90,7 @@ def main(_):
       if cfg.track_softmax:  # Enable running average for eval
         for layer in model.layers:
           layer.attn.track_entropy = True
-      if cfg.track_hidden_variance:
+      if cfg.track_normalisation_variance:
         for layer in model.layers:
           layer.attn_norm.track_variance = True
           layer.mlp_norm.track_variance = True
@@ -97,7 +100,7 @@ def main(_):
       if cfg.track_softmax:  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
-      if cfg.track_hidden_variance:
+      if cfg.track_normalisation_variance:
         for layer in model.layers:
           layer.attn_norm.track_variance = False
           layer.mlp_norm.track_variance = False
@@ -127,7 +130,7 @@ def main(_):
       if cfg.track_softmax:  # Enable running average for eval
         for layer in model.layers:
           layer.attn.track_entropy = True
-      if cfg.track_hidden_variance:
+      if cfg.track_normalisation_variance:
         for layer in model.layers:
           layer.attn_norm.track_variance = True
           layer.mlp_norm.track_variance = True
@@ -137,7 +140,7 @@ def main(_):
       if cfg.track_softmax:  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
-      if cfg.track_hidden_variance:
+      if cfg.track_normalisation_variance:
         for layer in model.layers:
           layer.attn_norm.track_variance = False
           layer.mlp_norm.track_variance = False
