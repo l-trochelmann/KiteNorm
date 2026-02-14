@@ -114,8 +114,10 @@ class TorchEngine(torch.nn.Module):
       if self.regularise:
         vars_ = []
         for m in self.model.modules():
-          if hasattr(m, "last_var") and (m.last_var is not None):
-            vars_.append(m.last_var)
+          if type(m).__name__ in {"LayerNorm"}:
+            v = getattr(m, "last_var", None)
+            if v is not None:
+              vars_.append(v)
         if not vars_:
           raise NotImplementedError("Attempted to fetch normalisation variances for the regulariser, but model has no normalisation layers!")
         vars = torch.stack(vars_)  # shape: (n_norm_layers,)

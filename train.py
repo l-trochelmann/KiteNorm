@@ -81,12 +81,12 @@ def main(_):
 
     # Train
     if cfg.use_variance_regulariser:
-      model_has_normalisation = False
+      model_has_target_norm = False
       for m in model.modules():
-        if hasattr(m, "keep_last_var"):
-          m.keep_last_var = True
-          model_has_normalisation = True
-      if model_has_normalisation == False:
+        if type(m).__name__ in {"LayerNorm"}:
+          setattr(m, "keep_last_var", True)
+          model_has_target_norm = True
+      if model_has_target_norm == False:
         raise NotImplementedError("Attempted to enable variance regulariser, but model has no normalisation!")
     train_loss = engine.step(micro_batch)
     train_losses.append(train_loss)
