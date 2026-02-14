@@ -10,6 +10,9 @@ class LayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
 
+        self.keep_last_var = False  # Whether to store the last calculated variance for the regulariser
+        self.last_var = None
+
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
         self.register_buffer("running_count", torch.zeros(1))
@@ -19,6 +22,9 @@ class LayerNorm(nn.Module):
         mean = input.mean(dim=-1, keepdim=True)
         var = input.var(dim=-1, unbiased=False, keepdim=True)
     
+        if self.keep_last_var:
+            self.last_var = var.mean()       
+
         if self.track_variance:
             current_var = var.float().detach().mean().item()
             self.running_var_sum += current_var

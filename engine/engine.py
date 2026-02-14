@@ -81,6 +81,8 @@ class TorchEngine(torch.nn.Module):
     param_groups = get_param_groups(model, cfg.weight_decay)
     self.optimizer = intialize_optimizer(param_groups, cfg)
     self.scheduler = initalize_scheduler(self.optimizer, cfg)
+    self.regularise = cfg.use_variance_regulariser
+    self.reg_strength = cfg.regulariser_strength
 
     if cfg.resume:
       self.optimizer.load_state_dict(ckpt['optimizer'])
@@ -108,6 +110,21 @@ class TorchEngine(torch.nn.Module):
       output = self.model(inputs)
       logits = getattr(output, 'logits', output)
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+      if self.regularise:
+        vars_ = []
+        for m in self.model.modules():
+          if hasattr(m, "last_var") and (m.last_var is not None):
+            vars_.append(m.last_var)
+        if not vars_:
+          raise NotImplementedError("Attempted to fetch normalisation variances for the regulariser, but model has no normalisation layers!")
+        vars = torch.stack(vars_)  # shape: (n_norm_layers,)
+
+        # TODO: compute reg based on vars, below is placeholder
+        reg = vars.sum()  # replace
+
+        loss = loss + self.reg_strength * reg
+
       loss = loss / self.accumulation_steps
 
     # detach for logging (scale up to undo the division above)

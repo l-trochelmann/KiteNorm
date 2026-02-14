@@ -80,6 +80,14 @@ def main(_):
       break
 
     # Train
+    if cfg.use_variance_regulariser:
+      model_has_normalisation = False
+      for m in model.modules():
+        if hasattr(m, "keep_last_var"):
+          m.keep_last_var = True
+          model_has_normalisation = True
+      if model_has_normalisation == False:
+        raise NotImplementedError("Attempted to enable variance regulariser, but model has no normalisation!")
     train_loss = engine.step(micro_batch)
     train_losses.append(train_loss)
 
