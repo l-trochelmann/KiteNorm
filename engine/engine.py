@@ -8,6 +8,7 @@ from contextlib import nullcontext
 
 from models import get_param_groups
 from optim import intialize_optimizer, initalize_scheduler
+from optim.regularisers import *
 
 
 def _move_to_device(batch, seq_len, device):
@@ -112,19 +113,7 @@ class TorchEngine(torch.nn.Module):
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
 
       if self.regularise:
-        vars_ = []
-        for m in self.model.modules():
-          if type(m).__name__ in {"LayerNorm"}:
-            v = getattr(m, "last_var", None)
-            if v is not None:
-              vars_.append(v)
-        if not vars_:
-          raise NotImplementedError("Attempted to fetch normalisation variances for the regulariser, but model has no normalisation layers!")
-        vars = torch.stack(vars_)  # shape: (n_norm_layers,)
-
-        # TODO: compute reg based on vars, below is placeholder
-        reg = vars.sum()  # replace
-
+        reg = sum_of_variances(self.model)  # Change to name based regulariser selection
         loss = loss + self.reg_strength * reg
 
       loss = loss / self.accumulation_steps
