@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm
+from .components import LayerNorm, LayerNorm_Simple, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm, VarCollector
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -28,6 +28,7 @@ class ModelConfig:
     tie_embeddings: bool = False
     qknorm_L97: int = 2024
     compile: bool = True
+    track_var: bool = False
 
 
 MLP_CLASSES = {
@@ -190,11 +191,110 @@ class Block_NoNorm(nn.Module):
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.layer_id = layer_id
 
+        self.track_var = cfg.track_var
+        if self.track_var:
+            self.coll_attn_in = VarCollector()
+            self.coll_attn_out = VarCollector()
+            self.coll_attn_add = VarCollector()
+            self.coll_mlp_in = VarCollector()
+            self.coll_mlp_out = VarCollector()
+            self.coll_mlp_add = VarCollector()
+
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
-        x = x + self.attn(x, freqs_cis)
-        x = x + self.mlp(x)
-        return x 
+        if not self.track_var:
+            x = x + self.attn(x, freqs_cis)
+            x = x + self.mlp(x)
+            return x
+        else:
+            x_in = x  # step through attn sublayer
+            self.coll_attn_in.calc_var(x_in)
+            x_out = self.attn(x, freqs_cis)
+            self.coll_attn_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_attn_add.calc_var(x_add)
+
+            x_in = x_add  # step through mlp sublayer
+            self.coll_mlp_in.calc_var(x_in)
+            x_out = self.mlp(x_in)
+            self.coll_mlp_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_mlp_add.calc_var(x_add)
+
+            return x_add
+        
+
+class NormBlock(nn.Module):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.attn = _get_attn(cfg)
+        self.attn_norm = _get_ln_variant(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+        self.mlp_norm = _get_ln_variant(cfg)
+        self.layer_id = layer_id
+
+        self.track_var = cfg.track_var
+        if self.track_var:
+            self.coll_attn_in = VarCollector()
+            self.coll_attn_out = VarCollector()
+            self.coll_attn_add = VarCollector()
+            self.coll_mlp_in = VarCollector()
+            self.coll_mlp_out = VarCollector()
+            self.coll_mlp_add = VarCollector()
+
+
+class Block_PreNorm(NormBlock):
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        if not self.track_var:
+            x = x + self.attn(self.attn_norm(x), freqs_cis)
+            x = x + self.mlp(self.mlp_norm(x))
+            return x
+        else:
+            x_in = x  # step through attn sublayer
+            self.coll_attn_in.calc_var(x_in)
+            x_norm = self.attn_norm(x_in)
+            x_out = self.attn(x_norm, freqs_cis)
+            self.coll_attn_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_attn_add.calc_var(x_add)
+
+            x_in = x_add  # step through mlp sublayer
+            self.coll_mlp_in.calc_var(x_in)
+            x_norm = self.mlp_norm(x_in)
+            x_out = self.mlp(x_norm)
+            self.coll_mlp_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_mlp_add.calc_var(x_add)
+
+            return x_add
+
+
+class Block_PostNorm(NormBlock):
+    def forward(self, x, freqs_cis):
+        # x: (bsz, seqlen, dim)
+        if not self.track_var:
+            x = self.attn_norm(x + self.attn(x, freqs_cis))
+            x = self.mlp_norm(x + self.mlp(x))
+            return x
+        else:
+            x_in = x  # step through attn sublayer
+            self.coll_attn_in.calc_var(x_in)
+            x_out = self.attn(x_in, freqs_cis)
+            self.coll_attn_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_attn_add.calc_var(x_add)
+            x_norm = self.attn_norm(x_add)
+
+            x_in = x_norm  # step through mlp sublayer
+            self.coll_mlp_in.calc_var(x_in)
+            x_out = self.mlp(x_in)
+            self.coll_mlp_out.calc_var(x_out)
+            x_add = x_in + x_out
+            self.coll_mlp_add.calc_var(x_add)
+            x_norm = self.mlp_norm(x_add)
+
+            return x_norm
 
 
 class Block_PreAttnNorm(nn.Module):
@@ -257,32 +357,6 @@ class Block_PostGLUNorm(nn.Module):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         x = x + self.attn(x, freqs_cis)
-        x = self.mlp_norm(x + self.mlp(x))
-        return x
-
-
-class NormBlock(nn.Module):
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.attn_norm = _get_ln_variant(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = _get_ln_variant(cfg)
-        self.layer_id = layer_id
-
-
-class Block_PreNorm(NormBlock):
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = x + self.attn(self.attn_norm(x), freqs_cis)
-        x = x + self.mlp(self.mlp_norm(x))
-        return x
-    
-
-class Block_PostNorm(NormBlock):
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = self.attn_norm(x + self.attn(x, freqs_cis))
         x = self.mlp_norm(x + self.mlp(x))
         return x
 

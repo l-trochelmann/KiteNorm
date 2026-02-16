@@ -25,7 +25,8 @@ def construct_model(cfg):
       attn_style = cfg.attn_style,
       ln_use_shift = cfg.ln_use_shift,
       qknorm_L97 = cfg.qknorm_L97,
-      compile = cfg.torch_compile
+      compile = cfg.torch_compile,
+      track_var = cfg.track_sublayer_variance or cfg.use_variance_regulariser
     )
     model = Transformer(model_cfg)
     

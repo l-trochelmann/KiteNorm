@@ -4,6 +4,29 @@ import torch.nn.functional as F
 from torch import nn
 
 
+class VarCollector(nn.Module):
+    """Keeps track of last computed input variance and a cumulative average. Returns nothing."""
+    def __init__(self):
+        super().__init__()
+        self.last_var = None
+
+        self.track_variance = False  # While True, keeps a running average over the input variance
+        self.register_buffer("running_var_sum", torch.zeros(1))
+        self.register_buffer("running_count", torch.zeros(1))
+
+    def calc_var(self, input):
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+
+        self.last_var = var
+
+        if self.track_variance:
+            current_var = var.float().detach().mean().item()
+            self.running_var_sum += current_var
+            self.running_count += 1
+
+        return
+
+
 class LayerNorm(nn.Module):
     def __init__(self, dim: int, bias: bool = False):
         super().__init__()

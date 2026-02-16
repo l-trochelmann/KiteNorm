@@ -60,14 +60,6 @@ def main(_):
   else:
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
 
-  # Ensure valid hidden state tracking:
-  if cfg.track_normalisation_variance:
-    if not cfg.ln_config in ('pre-norm', 'post-norm'):
-      raise NotImplementedError("When cfg.track_normalisation_variance is True, ln_config must be either 'pre-norm' or 'post-norm'")
-  if cfg.track_sublayer_variance:
-    probe_batch = next(iter(trainloader))
-    probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
-
   # Training
   print_master("=== Start Training! ===")
   metrics = defaultdict(list)
@@ -95,24 +87,31 @@ def main(_):
     valid_loss = None
     if cfg.eval and ((just_updated and step % cfg.eval_every_steps == 0) or micro_step==1):
       print_master("Evaluating on validation set")
-      if cfg.track_softmax:  # Enable running average for eval
+
+      if cfg.track_softmax:  # Enable running average before eval
         for layer in model.layers:
           layer.attn.track_entropy = True
-      if cfg.track_normalisation_variance:
+
+      if cfg.track_sublayer_variance:  # Enable running averages before eval
+        collector_attrs = (
+            "coll_attn_in", "coll_attn_out", "coll_attn_add",
+            "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
+        )
         for layer in model.layers:
-          layer.attn_norm.track_variance = True
-          layer.mlp_norm.track_variance = True
+            for attr in collector_attrs:
+                getattr(layer, attr).track_variance = True
 
       valid_loss = engine.eval(validloader)  # Run eval
 
       if cfg.track_softmax:  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
-      if cfg.track_normalisation_variance:
-        for layer in model.layers:
-          layer.attn_norm.track_variance = False
-          layer.mlp_norm.track_variance = False
 
+      if cfg.track_sublayer_variance:  # Disable running averages after eval
+        for layer in model.layers:
+            for attr in collector_attrs:
+                getattr(layer, attr).track_variance = False
+  
     # Log
     if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
       if master_process:
@@ -135,23 +134,29 @@ def main(_):
   if master_process:
     if cfg.eval:
       print_master("Evaluating on validation set (final)")
-      if cfg.track_softmax:  # Enable running average for eval
+      if cfg.track_softmax:  # Enable running average before eval
         for layer in model.layers:
           layer.attn.track_entropy = True
-      if cfg.track_normalisation_variance:
+
+      if cfg.track_sublayer_variance:  # Enable running averages before eval
+        collector_attrs = (
+            "coll_attn_in", "coll_attn_out", "coll_attn_add",
+            "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
+        )
         for layer in model.layers:
-          layer.attn_norm.track_variance = True
-          layer.mlp_norm.track_variance = True
+            for attr in collector_attrs:
+                getattr(layer, attr).track_variance = True
 
       valid_loss = engine.eval(validloader)  # Run eval
 
       if cfg.track_softmax:  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
-      if cfg.track_normalisation_variance:
+
+      if cfg.track_sublayer_variance:  # Disable running averages after eval
         for layer in model.layers:
-          layer.attn_norm.track_variance = False
-          layer.mlp_norm.track_variance = False
+            for attr in collector_attrs:
+                getattr(layer, attr).track_variance = False
 
     utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
               probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)

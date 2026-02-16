@@ -48,7 +48,7 @@ dtype: 'bfloat16'
 
 optim: 'adamw'
 fused_optim: True
-use_variance_regulariser: True
+use_variance_regulariser: False
 regulariser_strength: 1
 lr: [2.e-4, 5.e-4, 1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2, 5.e-2]
 weight_decay: 0.1
@@ -71,15 +71,14 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_post-norm_6L_test-regulariser-flow'
-exp_name: 'TR_post-norm_6L_test-regulariser-flow'
+wandb_run_name: 'TR_post-norm_6L_sublayer-variance-full'
+exp_name: 'TR_post-norm_6L_sublayer-variance-full'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: True
 track_param_update: True
 track_softmax: False
 track_ln_weights: False
-track_normalisation_variance: True
 track_sublayer_variance: True
 
 resume: False

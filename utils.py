@@ -233,93 +233,43 @@ def get_ln_param_stats(model):
 
   return ln_param_stats
 
-def get_normalisation_variance(model):
-  """Retrieves the mean hidden state variance before normalisation for each normalisation instance.
 
-  Returns:
-      dict: A dictionary mapping layer indices to respective hidden state variance before normalisation 
-  """
-  hidden_variances = {}
-  model.eval()
-  for layer in model.layers:
-    layer_attn_var = layer.attn_norm.running_var_sum / layer.attn_norm.running_count
-    layer_mlp_var = layer.mlp_norm.running_var_sum / layer.mlp_norm.running_count
-    hidden_variances[f"hidden_variance_attn-norm/{layer.layer_id}"] = layer_attn_var.item()
-    hidden_variances[f"hidden_variance_mlp-norm/{layer.layer_id}"] = layer_mlp_var.item()
+def get_sublayer_variance(model):
+    """
+    Retrieves mean hidden-state variance at each collection point (via running average)
+    for each block/layer. Resets collector running stats after reading.
 
-    layer.attn_norm.running_var_sum.zero_()  # Reset running average before the next val pass
-    layer.attn_norm.running_count.zero_()  # Reset running average before the next val pass
-    layer.mlp_norm.running_var_sum.zero_()  # Reset running average before the next val pass
-    layer.mlp_norm.running_count.zero_()  # Reset running average before the next val pass
+    Returns:
+        dict: A dicitionary mapping collection point names to calculated variance.
+    """
+    hidden_variances = {}
+    model.eval()
 
-  return hidden_variances
+    collector_attrs = (
+        "coll_attn_in", "coll_attn_out", "coll_attn_add",
+        "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
+    )
 
-def get_hidden_variances(model, probe_inputs, ctx):
-  """Retrieves the mean hidden state variance over a probe batch for the input and output of each sublayer.
-
-  Returns:
-      dict: A dictionary mapping structured layer indices to respective sublayer input and output hidden state variance
-  """
-  model.eval()
-  device = next(model.parameters()).device
-  probe_inputs_gpu = probe_inputs.to(device, non_blocking=True)
-  freqs_cis = model.freqs_cis.to(device)
-  hidden_variances = {}
-
-  
-  def mean_tokenwise_var(x):
-    # x: (B, L, D) -> var across D per token, then mean across (B, L)
-    v = x.var(dim=-1, unbiased=False)  # (B, L)
-    return v.float().mean().item()
-
-  with ctx, torch.no_grad():
-    x = model.embed_tokens(probe_inputs_gpu)  # (B, L, D)
     for layer in model.layers:
-      lid = getattr(layer, "layer_id", None)
-      lname = layer.__class__.__name__.lower()
+        lid = layer.layer_id
 
-      # Attention sublayer
-      hidden_variances[f"hidden_variance_attn_sublayer_in/{lid}"] = mean_tokenwise_var(x)  # hidden state entering sublayer
-      if lname in ("block_prenorm", "block_preattnnorm"):
-        # x = x + attn(attn_norm(x))
-        residual = layer.attn(layer.attn_norm(x), freqs_cis)
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = x + residual
-      elif lname in ("block_postnorm", "block_postattnnorm"):
-        # x = attn_norm(x + attn(x))
-        residual = layer.attn(x, freqs_cis)
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = layer.attn_norm(x + residual)
-      else:
-        # No attn norm (Block_NoNorm, Block_PreGLUNorm, Block_PostGLUNorm)
-        residual = layer.attn(x, freqs_cis)
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = x + residual
-      hidden_variances[f"hidden_variance_attn_sublayer_out/{lid}"] = sublayer_out_var  # hidden state exiting sublayer
+        for attr in collector_attrs:
+            coll = getattr(layer, attr)  # assume collectors exist
 
-      # MLP sublayer
-      hidden_variances[f"hidden_variance_mlp_sublayer_in/{lid}"] = mean_tokenwise_var(x)  # hidden state entering sublayer
-      if lname in ("block_prenorm", "block_preglunorm"):
-        # x = x + mlp(mlp_norm(x))
-        residual = layer.mlp(layer.mlp_norm(x))
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = x + residual
-      elif lname in ("block_postnorm", "block_postglunorm"):
-        # x = mlp_norm(x + mlp(x))
-        residual = layer.mlp(x)
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = layer.mlp_norm(x + residual)
-      else:
-        # No mlp norm (Block_NoNorm, Block_PreAttnNorm, Block_PostAttnNorm)se
-        residual = layer.mlp(x)
-        sublayer_out_var = mean_tokenwise_var(residual)
-        x = x + residual
-      hidden_variances[f"hidden_variance_mlp_sublayer_out/{lid}"] = sublayer_out_var  # hidden state exiting sublayer.
+            count = coll.running_count.item()
+            if count > 0:
+                avg = (coll.running_var_sum / coll.running_count).item()
+            else:
+                avg = float("nan")
 
-  del probe_inputs_gpu, x, freqs_cis, sublayer_out_var
-  torch.cuda.empty_cache()
+            name = attr.replace("coll_", "").replace("_", "-")  # e.g. "attn-in"
+            hidden_variances[f"hidden_variance_{name}/{lid}"] = avg
 
-  return hidden_variances
+            # Reset running stats for next eval pass
+            coll.running_var_sum.zero_()
+            coll.running_count.zero_()
+
+    return hidden_variances
 
 
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
@@ -366,17 +316,13 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   if cfg.track_softmax and valid_loss is not None:
     new_metrics.update(get_softmax_entropy(model))
 
-  # Add LN weights metrics if requestedx
+  # Add LN weights metrics if requested
   if cfg.track_ln_weights:
     new_metrics.update(get_ln_param_stats(model))
-
-  # Add normalisation variance metrics if requested, only following a validation pass
-  if cfg.track_normalisation_variance and valid_loss is not None:
-    new_metrics.update(get_normalisation_variance(model))
   
-  # Add sublayer hidden state metrics if requested
-  if cfg.track_sublayer_variance:
-    new_metrics.update(get_hidden_variances(model, probe_inputs, ctx))
+  # Add sublayer hidden state metrics if requested, only following a validation pass
+  if cfg.track_sublayer_variance and valid_loss is not None:
+    new_metrics.update(get_sublayer_variance(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
