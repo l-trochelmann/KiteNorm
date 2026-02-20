@@ -1,4 +1,5 @@
-"""Pretrain a Transformer on language modeling."""
+"""Pretrain a Transformer on language modeling.
+DDP currently not safe."""
 
 from absl import app, flags
 from collections import defaultdict
@@ -72,14 +73,14 @@ def main(_):
       break
 
     # Train
-    if cfg.use_variance_regulariser:
+    if cfg.regulariser == "mean_norm_var":
       model_has_target_norm = False
       for m in model.modules():
         if type(m).__name__ in {"LayerNorm"}:
           setattr(m, "keep_last_var", True)
           model_has_target_norm = True
       if model_has_target_norm == False:
-        raise NotImplementedError("Attempted to enable variance regulariser, but model has no normalisation!")
+        raise NotImplementedError("Attempted to enable normalisation-based regulariser, but model has no normalisation!")
     train_loss = engine.step(micro_batch)
     train_losses.append(train_loss)
 

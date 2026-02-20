@@ -8,7 +8,7 @@ from contextlib import nullcontext
 
 from models import get_param_groups
 from optim import intialize_optimizer, initalize_scheduler
-from optim.regularisers import *
+import optim.regularisers as regs
 
 
 def _move_to_device(batch, seq_len, device):
@@ -82,7 +82,7 @@ class TorchEngine(torch.nn.Module):
     param_groups = get_param_groups(model, cfg.weight_decay)
     self.optimizer = intialize_optimizer(param_groups, cfg)
     self.scheduler = initalize_scheduler(self.optimizer, cfg)
-    self.regularise = cfg.use_variance_regulariser
+    self.regulariser_name = cfg.regulariser
     self.reg_strength = cfg.regulariser_strength
 
     if cfg.resume:
@@ -112,8 +112,13 @@ class TorchEngine(torch.nn.Module):
       logits = getattr(output, 'logits', output)
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-      if self.regularise:
-        reg = sum_of_variances(self.model)  # Change to name based regulariser selection
+      if self.regulariser_name:
+        if self.regulariser_name == "mean_L1":
+          reg = regs.mean_L1(self.model)
+        elif self.regulariser_name == "mean_L2":
+          reg = regs.mean_L2(self.model)
+        elif self.regulariser_name == "mean_norm_var":
+          reg = regs.mean_norm_var(self.model)
         loss = loss + self.reg_strength * reg
 
       loss = loss / self.accumulation_steps
