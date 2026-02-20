@@ -117,7 +117,7 @@ def main(_):
     if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
       if master_process:
         utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-                  probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
+                  probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term)
       if micro_step != 1:
         train_losses = []
 

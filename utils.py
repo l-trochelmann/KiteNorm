@@ -272,7 +272,7 @@ def get_sublayer_variance(model):
     return hidden_variances
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None):
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
   # NOTE: valid_loss is a float, already reduced across GPUs
@@ -285,9 +285,9 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     "step": int(micro_step / cfg.grad_accumulation_steps),
     "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
     "lr": optimizer.param_groups[0].get("lr", float("NaN")),
+    "train/reg_term": reg_term.item() if reg_term is not None else None,
     "train/loss": train_loss,
     "train/ppl": math.exp(train_loss) if train_loss < 709.78 else float("inf"),
-
   }
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss

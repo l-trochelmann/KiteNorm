@@ -77,12 +77,14 @@ class TorchEngine(torch.nn.Module):
 
     # Loss
     self.criterion = CrossEntropyLoss()
+    self.reg_term = None  # for logging
+    self._reg_acc = torch.tensor(0.0, device = self.device)  # for logging
 
     # Optimizer
     param_groups = get_param_groups(model, cfg.weight_decay)
     self.optimizer = intialize_optimizer(param_groups, cfg)
     self.scheduler = initalize_scheduler(self.optimizer, cfg)
-    self.regulariser_name = cfg.regulariser
+    self.regulariser = cfg.regulariser
     self.reg_strength = cfg.regulariser_strength
 
     if cfg.resume:
@@ -112,18 +114,23 @@ class TorchEngine(torch.nn.Module):
       logits = getattr(output, 'logits', output)
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-      if self.regulariser_name:
-        if self.regulariser_name == "mean_L1":
+      if self.regulariser:
+        reg_term = None
+        if self.regulariser == "mean_L1":
           reg = regs.mean_L1(self.model)
-        elif self.regulariser_name == "mean_L2":
+        elif self.regulariser == "mean_L2":
           reg = regs.mean_L2(self.model)
-        elif self.regulariser_name == "mean_LogLin":
+        elif self.regulariser == "mean_LogLin":
           reg = regs.mean_LogLin(self.model)
-        elif self.regulariser_name == "mean_LogSqr":
+        elif self.regulariser == "mean_LogSqr":
           reg = regs.mean_LogSqr(self.model)
-        elif self.regulariser_name == "mean_norm_var":
+        elif self.regulariser == "mean_norm_var":
           reg = regs.mean_norm_var(self.model)
-        loss = loss + self.reg_strength * reg
+        else:
+          raise ValueError(f"Unknown regulariser: {self.regulariser}")
+        reg_term = self.reg_strength * reg
+        loss = loss + reg_term
+        self._reg_acc = self._reg_acc + reg_term.detach()        
 
       loss = loss / self.accumulation_steps
 
@@ -151,6 +158,10 @@ class TorchEngine(torch.nn.Module):
       # step the scheduler
       if self.scheduler:
         self.scheduler.step()
+      
+      if self.regulariser:
+        self.reg_term = (self._reg_acc / self.accumulation_steps).detach()
+        self._reg_acc.zero_()
   
     return loss_val
 
