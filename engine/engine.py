@@ -117,6 +117,10 @@ class TorchEngine(torch.nn.Module):
           reg = regs.mean_L1(self.model)
         elif self.regulariser_name == "mean_L2":
           reg = regs.mean_L2(self.model)
+        elif self.regulariser_name == "mean_LogLin":
+          reg = regs.mean_LogLin(self.model)
+        elif self.regulariser_name == "mean_LogSqr":
+          reg = regs.mean_LogSqr(self.model)
         elif self.regulariser_name == "mean_norm_var":
           reg = regs.mean_norm_var(self.model)
         loss = loss + self.reg_strength * reg
