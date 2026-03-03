@@ -32,14 +32,10 @@ class LayerNorm(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+        self.eps = 1e-6
 
         self.keep_last_var = False  # Whether to store the last calculated variance for the regulariser
         self.last_var = None
-
-        self.track_variance = False  # While True, keeps a running average over the input variance
-        self.register_buffer("running_var_sum", torch.zeros(1))
-        self.register_buffer("running_count", torch.zeros(1))
-        self.eps = 1e-6
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
@@ -47,11 +43,6 @@ class LayerNorm(nn.Module):
     
         if self.keep_last_var:
             self.last_var = var.mean()       
-
-        if self.track_variance:
-            current_var = var.float().detach().mean().item()
-            self.running_var_sum += current_var
-            self.running_count += 1
     
         y = (input - mean) * torch.rsqrt(var + self.eps)
     
@@ -66,9 +57,20 @@ class LayerNorm_Simple(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
         self.normalized_shape = torch.Size([dim])
+        self.eps = 1e-6
+
+        self.keep_last_var = False  # Whether to store the last calculated variance for the regulariser
+        self.last_var = None
 
     def forward(self, input):
-        return F.layer_norm(input, self.normalized_shape, None, None, 1e-6)
+        mean = input.mean(dim=-1, keepdim=True)
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+
+        if self.keep_last_var:
+            self.last_var = var.mean()
+
+        y = (input - mean) * torch.rsqrt(var + self.eps)  # No affine
+        return y
 
 
 class DetachNorm(nn.Module):

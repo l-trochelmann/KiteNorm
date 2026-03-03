@@ -16,6 +16,7 @@ def construct_model(cfg):
       n_layers = cfg.n_layers,
       n_heads = cfg.n_heads,
       weight_init = cfg.weight_init,
+      res_contrib = cfg.residual_contrib,
       rmsorm_eps = 1e-6,
       mlp = cfg.mlp_class,
       seq_len = cfg.seq_len,
@@ -26,7 +27,7 @@ def construct_model(cfg):
       ln_use_shift = cfg.ln_use_shift,
       qknorm_L97 = cfg.qknorm_L97,
       compile = cfg.torch_compile,
-      track_var = cfg.track_sublayer_variance or bool(cfg.regulariser)
+      track_var = cfg.track_sublayer_variance or bool(cfg.regulariser)  # For logging  or regulariser
     )
     model = Transformer(model_cfg)
     

@@ -19,6 +19,7 @@ class ModelConfig:
     n_layers: int
     n_heads: int
     weight_init: str
+    res_contrib: float
     ln_config: str
     ln_style: str
     attn_style: str
@@ -190,6 +191,7 @@ class Block_NoNorm(nn.Module):
         self.attn = _get_attn(cfg)
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.layer_id = layer_id
+        self.res_contrib = cfg.res_contrib
 
         self.track_var = cfg.track_var
         if self.track_var:
@@ -203,26 +205,39 @@ class Block_NoNorm(nn.Module):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            x = x + self.attn(x, freqs_cis)
-            x = x + self.mlp(x)
+            if self.res_contrib == -1:
+                x = x + self.attn(x, freqs_cis)
+                x = x + self.mlp(x)
+            else:
+                r = self.res_contrib
+                x = math.sqrt(1-r) * x + math.sqrt(r) * self.attn(x, freqs_cis)
+                x = math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(x)
             return x
         else:
             x_in = x  # step through attn sublayer
             self.coll_attn_in.calc_var(x_in)
             x_out = self.attn(x, freqs_cis)
             self.coll_attn_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_attn_add.calc_var(x_add)
 
             x_in = x_add  # step through mlp sublayer
             self.coll_mlp_in.calc_var(x_in)
             x_out = self.mlp(x_in)
             self.coll_mlp_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_mlp_add.calc_var(x_add)
 
             return x_add
-        
+
 
 class NormBlock(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
@@ -232,6 +247,7 @@ class NormBlock(nn.Module):
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.mlp_norm = _get_ln_variant(cfg)
         self.layer_id = layer_id
+        self.res_contrib = cfg.res_contrib
 
         self.track_var = cfg.track_var
         if self.track_var:
@@ -247,8 +263,13 @@ class Block_PreNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            x = x + self.attn(self.attn_norm(x), freqs_cis)
-            x = x + self.mlp(self.mlp_norm(x))
+            if self.res_contrib == -1:
+                x = x + self.attn(self.attn_norm(x), freqs_cis)
+                x = x + self.mlp(self.mlp_norm(x))
+            else:
+                r = self.res_contrib
+                x = math.sqrt(1-r) * x + math.sqrt(r) * self.attn(self.attn_norm(x), freqs_cis)
+                x = math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(self.mlp_norm(x))
             return x
         else:
             x_in = x  # step through attn sublayer
@@ -256,7 +277,11 @@ class Block_PreNorm(NormBlock):
             x_norm = self.attn_norm(x_in)
             x_out = self.attn(x_norm, freqs_cis)
             self.coll_attn_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_attn_add.calc_var(x_add)
 
             x_in = x_add  # step through mlp sublayer
@@ -264,7 +289,11 @@ class Block_PreNorm(NormBlock):
             x_norm = self.mlp_norm(x_in)
             x_out = self.mlp(x_norm)
             self.coll_mlp_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_mlp_add.calc_var(x_add)
 
             return x_add
@@ -274,15 +303,25 @@ class Block_PostNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            x = self.attn_norm(x + self.attn(x, freqs_cis))
-            x = self.mlp_norm(x + self.mlp(x))
+            if self.res_contrib == -1:
+                x = self.attn_norm(x + self.attn(x, freqs_cis))
+                x = self.mlp_norm(x + self.mlp(x))
+            else:
+                r = self.res_contrib
+                x = self.attn_norm(math.sqrt(1-r) * x + math.sqrt(r) * self.attn(x, freqs_cis))
+                x = self.mlp_norm(math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(x))
+
             return x
         else:
             x_in = x  # step through attn sublayer
             self.coll_attn_in.calc_var(x_in)
             x_out = self.attn(x_in, freqs_cis)
             self.coll_attn_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_attn_add.calc_var(x_add)
             x_norm = self.attn_norm(x_add)
 
@@ -290,7 +329,11 @@ class Block_PostNorm(NormBlock):
             self.coll_mlp_in.calc_var(x_in)
             x_out = self.mlp(x_in)
             self.coll_mlp_out.calc_var(x_out)
-            x_add = x_in + x_out
+            if self.res_contrib == -1:  # no contribution rescaling
+                x_add = x_in + x_out
+            else:  # rescale contribution to output variance
+                r = self.res_contrib
+                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
             self.coll_mlp_add.calc_var(x_add)
             x_norm = self.mlp_norm(x_add)
 

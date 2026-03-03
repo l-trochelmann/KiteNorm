@@ -2,17 +2,6 @@
 
 import torch
 
-def mean_norm_var(model):
-    vars_ = []
-    for m in model.modules():
-      if type(m).__name__ in {"LayerNorm"}:
-        v = m.last_var
-        vars_.append(v)
-    if not vars_:
-      raise NotImplementedError("Attempted to fetch normalisation variances for the regulariser, but model has no normalisation layers!")
-    vars = torch.stack(vars_)  # shape: (n_norm_layers,)
-    reg = vars.mean()
-    return reg
 
 def mean_L1(model):
   """
