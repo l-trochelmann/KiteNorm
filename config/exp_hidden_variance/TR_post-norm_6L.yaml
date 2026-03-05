@@ -26,8 +26,8 @@ tie_embeddings: False
 torch_compile: True
 
 weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale', 'xavier_res-scale', 'xavier_no-scale', 't-fixup', (ablations: 'gpt2_glu-scale', 'gpt2_attn_scale')
-skip_scale: -1  # must be in [0,1], or -1 for no rescaling. 1 retrieves standard residual block. 
-res_scale: -1  # must be in [0,1], or -1 for no rescaling. 1 retrieves standard residual block. 
+skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
+res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 
 ln_config: 'post-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop')
 ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
