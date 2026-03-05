@@ -160,7 +160,7 @@ def main(_):
                 getattr(layer, attr).track_variance = False
 
     utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-              probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params)
+              probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term)
     if cfg.save_last_checkpoint:
       save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 

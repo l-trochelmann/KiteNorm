@@ -234,16 +234,20 @@ def get_ln_param_stats(model):
   return ln_param_stats
 
 
-def get_sublayer_variance(model):
+def get_sublayer_variance(model, cfg):
     """
     Retrieves mean hidden-state variance at each collection point (via running average)
     for each block/layer. Resets collector running stats after reading.
+    If some sublayer branches are rescaled, additionally reports the rescaled variance.
 
     Returns:
         dict: A dicitionary mapping collection point names to calculated variance.
     """
     hidden_variances = {}
     model.eval()
+
+    skip_scale = cfg.skip_scale
+    res_scale = cfg.res_scale
 
     collector_attrs = (
         "coll_attn_in", "coll_attn_out", "coll_attn_add",
@@ -253,21 +257,27 @@ def get_sublayer_variance(model):
     for layer in model.layers:
         lid = layer.layer_id
 
+        # Fetch and log collected vars
+        raw_avg = {}
         for attr in collector_attrs:
-            coll = getattr(layer, attr)  # assume collectors exist
-
+            coll = getattr(layer, attr)
             count = coll.running_count.item()
-            if count > 0:
-                avg = (coll.running_var_sum / coll.running_count).item()
-            else:
-                avg = float("nan")
+            avg = (coll.running_var_sum / coll.running_count).item() if count > 0 else float("nan")
+            raw_avg[attr] = avg
 
-            name = attr.replace("coll_", "").replace("_", "-")  # e.g. "attn-in"
+            name = attr.replace("coll_", "").replace("_", "-")
             hidden_variances[f"hidden_variance_{name}/{lid}"] = avg
-
-            # Reset running stats for next eval pass
+            
             coll.running_var_sum.zero_()
             coll.running_count.zero_()
+
+        # Log rescaled vars if they exist
+        if skip_scale != -1:
+          hidden_variances[f"hidden_variance_attn-in_scaled-skip/{lid}"]  = skip_scale**2 * raw_avg["coll_attn_in"]
+          hidden_variances[f"hidden_variance_mlp-in_scaled-skip/{lid}"]   = skip_scale**2 * raw_avg["coll_mlp_in"]
+        if res_scale != -1:
+          hidden_variances[f"hidden_variance_attn-out_scaled-res/{lid}"]  = res_scale**2  * raw_avg["coll_attn_out"]
+          hidden_variances[f"hidden_variance_mlp-out_scaled-res/{lid}"]   = res_scale**2  * raw_avg["coll_mlp_out"]
 
     return hidden_variances
 
@@ -322,7 +332,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   
   # Add sublayer hidden state metrics if requested, only following a validation pass
   if cfg.track_sublayer_variance and valid_loss is not None:
-    new_metrics.update(get_sublayer_variance(model))
+    new_metrics.update(get_sublayer_variance(model, cfg))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)

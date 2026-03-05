@@ -19,7 +19,8 @@ class ModelConfig:
     n_layers: int
     n_heads: int
     weight_init: str
-    res_contrib: float
+    skip_scale: float
+    res_scale: float
     ln_config: str
     ln_style: str
     attn_style: str
@@ -184,59 +185,56 @@ class QKNormAttention(Attention):
 
         return self.w_out(out)
 
-
 class Block_NoNorm(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = _get_attn(cfg)
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.layer_id = layer_id
-        self.res_contrib = cfg.res_contrib
+
+        self.skip_scale = cfg.skip_scale
+        self.res_scale = cfg.res_scale
 
         self.track_var = cfg.track_var
         if self.track_var:
-            self.coll_attn_in = VarCollector()
+            self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
             self.coll_attn_add = VarCollector()
-            self.coll_mlp_in = VarCollector()
-            self.coll_mlp_out = VarCollector()
-            self.coll_mlp_add = VarCollector()
+            self.coll_mlp_in   = VarCollector()
+            self.coll_mlp_out  = VarCollector()
+            self.coll_mlp_add  = VarCollector()
+
+    def _mix(self, x_in, x_out):
+        if self.skip_scale != -1:
+            x_in = self.skip_scale * x_in
+        if self.res_scale != -1:
+            x_out = self.res_scale * x_out
+        return x_in + x_out
 
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            if self.res_contrib == -1:
-                x = x + self.attn(x, freqs_cis)
-                x = x + self.mlp(x)
-            else:
-                r = self.res_contrib
-                x = math.sqrt(1-r) * x + math.sqrt(r) * self.attn(x, freqs_cis)
-                x = math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(x)
+            x = self._mix(x, self.attn(x, freqs_cis))
+            x = self._mix(x, self.mlp(x))
             return x
-        else:
-            x_in = x  # step through attn sublayer
-            self.coll_attn_in.calc_var(x_in)
-            x_out = self.attn(x, freqs_cis)
-            self.coll_attn_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_attn_add.calc_var(x_add)
 
-            x_in = x_add  # step through mlp sublayer
-            self.coll_mlp_in.calc_var(x_in)
-            x_out = self.mlp(x_in)
-            self.coll_mlp_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_mlp_add.calc_var(x_add)
+        # attn
+        x_in = x
+        self.coll_attn_in.calc_var(x_in)
+        x_out = self.attn(x_in, freqs_cis)
+        self.coll_attn_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_attn_add.calc_var(x_add)
 
-            return x_add
+        # mlp
+        x_in = x_add
+        self.coll_mlp_in.calc_var(x_in)
+        x_out = self.mlp(x_in)
+        self.coll_mlp_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_mlp_add.calc_var(x_add)
+
+        return x_add
 
 
 class NormBlock(nn.Module):
@@ -247,97 +245,81 @@ class NormBlock(nn.Module):
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
         self.mlp_norm = _get_ln_variant(cfg)
         self.layer_id = layer_id
-        self.res_contrib = cfg.res_contrib
+
+        self.skip_scale = cfg.skip_scale
+        self.res_scale = cfg.res_scale
 
         self.track_var = cfg.track_var
         if self.track_var:
-            self.coll_attn_in = VarCollector()
+            self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
             self.coll_attn_add = VarCollector()
-            self.coll_mlp_in = VarCollector()
-            self.coll_mlp_out = VarCollector()
-            self.coll_mlp_add = VarCollector()
+            self.coll_mlp_in   = VarCollector()
+            self.coll_mlp_out  = VarCollector()
+            self.coll_mlp_add  = VarCollector()
+
+    def _mix(self, x_in, x_out):
+        if self.skip_scale != -1:
+            x_in = self.skip_scale * x_in
+        if self.res_scale != -1:
+            x_out = self.res_scale * x_out
+        return x_in + x_out
 
 
 class Block_PreNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            if self.res_contrib == -1:
-                x = x + self.attn(self.attn_norm(x), freqs_cis)
-                x = x + self.mlp(self.mlp_norm(x))
-            else:
-                r = self.res_contrib
-                x = math.sqrt(1-r) * x + math.sqrt(r) * self.attn(self.attn_norm(x), freqs_cis)
-                x = math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(self.mlp_norm(x))
+            x = self._mix(x, self.attn(self.attn_norm(x), freqs_cis))
+            x = self._mix(x, self.mlp(self.mlp_norm(x)))
             return x
-        else:
-            x_in = x  # step through attn sublayer
-            self.coll_attn_in.calc_var(x_in)
-            x_norm = self.attn_norm(x_in)
-            x_out = self.attn(x_norm, freqs_cis)
-            self.coll_attn_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_attn_add.calc_var(x_add)
 
-            x_in = x_add  # step through mlp sublayer
-            self.coll_mlp_in.calc_var(x_in)
-            x_norm = self.mlp_norm(x_in)
-            x_out = self.mlp(x_norm)
-            self.coll_mlp_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_mlp_add.calc_var(x_add)
+        # attn
+        x_in = x
+        self.coll_attn_in.calc_var(x_in)
+        x_out = self.attn(self.attn_norm(x_in), freqs_cis)
+        self.coll_attn_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_attn_add.calc_var(x_add)
 
-            return x_add
+        # mlp
+        x_in = x_add
+        self.coll_mlp_in.calc_var(x_in)
+        x_out = self.mlp(self.mlp_norm(x_in))
+        self.coll_mlp_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_mlp_add.calc_var(x_add)
+
+        return x_add
 
 
 class Block_PostNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
         if not self.track_var:
-            if self.res_contrib == -1:
-                x = self.attn_norm(x + self.attn(x, freqs_cis))
-                x = self.mlp_norm(x + self.mlp(x))
-            else:
-                r = self.res_contrib
-                x = self.attn_norm(math.sqrt(1-r) * x + math.sqrt(r) * self.attn(x, freqs_cis))
-                x = self.mlp_norm(math.sqrt(1-r) * x + math.sqrt(r) * self.mlp(x))
-
+            x = self.attn_norm(self._mix(x, self.attn(x, freqs_cis)))
+            x = self.mlp_norm(self._mix(x, self.mlp(x)))
             return x
-        else:
-            x_in = x  # step through attn sublayer
-            self.coll_attn_in.calc_var(x_in)
-            x_out = self.attn(x_in, freqs_cis)
-            self.coll_attn_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_attn_add.calc_var(x_add)
-            x_norm = self.attn_norm(x_add)
 
-            x_in = x_norm  # step through mlp sublayer
-            self.coll_mlp_in.calc_var(x_in)
-            x_out = self.mlp(x_in)
-            self.coll_mlp_out.calc_var(x_out)
-            if self.res_contrib == -1:  # no contribution rescaling
-                x_add = x_in + x_out
-            else:  # rescale contribution to output variance
-                r = self.res_contrib
-                x_add = math.sqrt(1-r) * x_in + math.sqrt(r) * x_out
-            self.coll_mlp_add.calc_var(x_add)
-            x_norm = self.mlp_norm(x_add)
+        # attn
+        x_in = x
+        self.coll_attn_in.calc_var(x_in)
+        x_out = self.attn(x_in, freqs_cis)
+        self.coll_attn_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_attn_add.calc_var(x_add)
+        x_norm = self.attn_norm(x_add)
 
-            return x_norm
+        # mlp
+        x_in = x_norm
+        self.coll_mlp_in.calc_var(x_in)
+        x_out = self.mlp(x_in)
+        self.coll_mlp_out.calc_var(x_out)
+        x_add = self._mix(x_in, x_out)
+        self.coll_mlp_add.calc_var(x_add)
+        x_norm = self.mlp_norm(x_add)
+
+        return x_norm
 
 
 class Block_PreAttnNorm(nn.Module):
