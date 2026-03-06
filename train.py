@@ -43,7 +43,10 @@ def main(_):
   
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
-
+  if cfg.regulariser:
+    for m in model.modules():
+      if type(m).__name__ in {"VarCollector"}:
+        setattr(m, "regularise", True)
 
   # Initialise model update tracking:
   if not cfg.track_model_update:
@@ -73,14 +76,6 @@ def main(_):
       break
 
     # Train
-    if cfg.regulariser == "mean_norm_var":
-      model_has_target_norm = False
-      for m in model.modules():
-        if type(m).__name__ in {"LayerNorm"}:
-          setattr(m, "keep_last_var", True)
-          model_has_target_norm = True
-      if model_has_target_norm == False:
-        raise NotImplementedError("Attempted to enable normalisation-based regulariser, but model has no normalisation!")
     train_loss = engine.step(micro_batch)
     train_losses.append(train_loss)
 

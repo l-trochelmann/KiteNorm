@@ -9,6 +9,7 @@ class VarCollector(nn.Module):
     def __init__(self):
         super().__init__()
         self.last_var = None
+        self.regularise = False
 
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
@@ -17,7 +18,10 @@ class VarCollector(nn.Module):
     def calc_var(self, input):
         var = input.var(dim=-1, unbiased=False, keepdim=True)
 
-        self.last_var = var
+        if self.regularise:
+            self.last_var = var
+        else:
+            self.last_var = var.detach()
 
         if self.track_variance:
             current_var = var.float().detach().mean().item()

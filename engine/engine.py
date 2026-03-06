@@ -138,6 +138,12 @@ class TorchEngine(torch.nn.Module):
     loss_val = loss.detach() * self.accumulation_steps
     if torch.isnan(loss_val):
       raise ValueError("Train loss is nan")
+    
+    # clear var collectors
+    if self.regulariser:
+      for m in self.model.modules():
+        if type(m).__name__ == "VarCollector":
+          m.last_var = None
 
     # backward pass, with gradient scaling if training in fp16
     self.scaler.scale(loss).backward()
