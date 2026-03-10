@@ -41,18 +41,18 @@ MLP_CLASSES = {
 
 
 def _get_ln_variant(cfg, dim=None):
-    if dim==None:
+    if dim is None:
         dim = cfg.dim
     style = cfg.ln_style.lower()
-    if style == 'layernorm':
+    if style == "layernorm":
         return LayerNorm(dim, bias=cfg.ln_use_shift)
-    elif style == 'layernorm_simple':
+    elif style == "layernorm_simple":
         return LayerNorm_Simple(dim)
-    elif style == 'rmsnorm':
+    elif style == "rmsnorm":
         return RMSNorm(dim, cfg.rmsorm_eps)
-    elif style == 'onlyaffine':
+    elif style == "onlyaffine":
         return OnlyAffine(dim, bias=cfg.ln_use_shift)
-    elif style == 'detachnorm':
+    elif style == "detachnorm":
         return DetachNorm(dim, bias=cfg.ln_use_shift)
     else:
         raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
@@ -384,6 +384,65 @@ class Block_PostGLUNorm(nn.Module):
         x = x + self.attn(x, freqs_cis)
         x = self.mlp_norm(x + self.mlp(x))
         return x
+    
+
+class Block_KEEL(nn.Module):
+    """
+    KEEL block following https://arxiv.org/pdf/2601.19895
+    """
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__()
+        self.layer_id = layer_id
+        self.alpha = 2.0 * cfg.n_layers
+
+        self.attn = _get_attn(cfg)
+        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
+
+        self.attn_norm_in  = _get_ln_variant(cfg)
+        self.attn_norm_out = _get_ln_variant(cfg)
+        self.mlp_norm_in   = _get_ln_variant(cfg)
+        self.mlp_norm_out  = _get_ln_variant(cfg)
+
+        self.track_var = cfg.track_var
+        if self.track_var:
+            self.coll_attn_in  = VarCollector()
+            self.coll_attn_out = VarCollector()
+            self.coll_attn_add = VarCollector()
+            self.coll_mlp_in   = VarCollector()
+            self.coll_mlp_out  = VarCollector()
+            self.coll_mlp_add  = VarCollector()
+
+    def forward(self, x, freqs_cis):
+        # attn
+        a_attn = 1.0 if self.layer_id == 0 else self.alpha  # omit alpha in first layer
+
+        if self.track_var:
+            x_in = x
+            self.coll_attn_in.calc_var(x_in)
+            x_out = self.attn(self.attn_norm_in(x_in), freqs_cis)
+            self.coll_attn_out.calc_var(x_out)
+            x_add = a_attn * x_in + x_out
+            self.coll_attn_add.calc_var(x_add)
+        else:
+            x_add = a_attn * x + self.attn(self.attn_norm_in(x), freqs_cis)
+
+        x = x_add if self.layer_id == 0 else self.attn_norm_out(x_add)  # omit outer LN for the very first sublayer
+
+        # mlp
+        a_mlp = 1.0 if self.layer_id == 0 else self.alpha  # omit alpha in first layer
+
+        if self.track_var:
+            x_in = x
+            self.coll_mlp_in.calc_var(x_in)
+            x_out = self.mlp(self.mlp_norm_in(x_in))
+            self.coll_mlp_out.calc_var(x_out)
+            x_add = a_mlp * x_in + x_out
+            self.coll_mlp_add.calc_var(x_add)
+            x = self.mlp_norm_out(x_add)
+        else:
+            x = self.mlp_norm_out(a_mlp * x + self.mlp(self.mlp_norm_in(x)))
+
+        return x
 
 
 class Transformer(nn.Module):
@@ -402,6 +461,8 @@ class Transformer(nn.Module):
             self.out_norm = _get_ln_variant(cfg)
         elif ln_config == 'post-norm':
             self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == "keel":
+            self.layers = nn.ModuleList([Block_KEEL(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'pre-attn-norm':  # ABLATION
             self.layers = nn.ModuleList([Block_PreAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
@@ -415,7 +476,7 @@ class Transformer(nn.Module):
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'keel', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]

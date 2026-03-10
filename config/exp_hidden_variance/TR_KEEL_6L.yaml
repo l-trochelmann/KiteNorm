@@ -29,11 +29,11 @@ weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale', '
 skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 
-ln_config: 'post-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'keel' (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop')
+ln_config: 'keel'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'keel' (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop')
 ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm'
 drop_which_ln: 0  # Which ln to drop if using 'pre-norm-drop' or 'post-norm-drop', choose from -1, 0, ...,  n_layers-1 (-1: out_norm)
-ln_use_shift: True  # whether or not to use the LayerNorm bias parameter if applicable
+ln_use_shift: False  # whether or not to use the LayerNorm bias parameter if applicable
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
 
 # note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
@@ -73,14 +73,14 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_post-norm_6L_baseline'
-exp_name: 'TR_post-norm_6L_baseline'
+wandb_run_name: 'TR_KEEL_6L'
+exp_name: 'TR_KEEL_6L'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: True
 track_param_update: True
 track_softmax: False
-track_ln_weights: False
+track_ln_weights: True
 track_sublayer_variance: True
 
 resume: False
