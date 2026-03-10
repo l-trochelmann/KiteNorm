@@ -1,6 +1,7 @@
 """Custom regularisers for improving/replacing LayerNorm"""
 
 import torch
+import torch.nn.functional as F
 
 
 def mean_L1(model):
@@ -110,6 +111,63 @@ def mean_LogSqr(model):
       if coll is not None:
         v_sqr = torch.square(coll.last_var)
         penalty = (v_sqr - torch.log(v_sqr) - 1).mean()  # average tokenwise log-square penalty
+        penalties.append(penalty)
+
+  if not penalties:
+    raise NotImplementedError("Attempting to fetch sublayer variances for the regulariser, but no specified VarCollector was found.")
+  
+  reg = torch.stack(penalties).mean()  # average over collectors for depth-invariance
+  
+  return reg
+
+
+def mean_ReLU(model):
+  """
+  Mean of ReLU(X-1) where X is variance
+  """
+  which_collectors = (  # Use collectors just before normalisation
+            # "coll_attn_in", 
+            # "coll_attn_out", 
+            "coll_attn_add",
+            # "coll_mlp_in",  
+            # "coll_mlp_out",  
+            "coll_mlp_add",
+        )
+  penalties = []
+  for layer in model.layers:
+    for name in which_collectors:
+      coll = getattr(layer, name, None)
+      if coll is not None:
+        penalty = F.relu(coll.last_var - 1.0).mean()
+        penalties.append(penalty)
+
+  if not penalties:
+    raise NotImplementedError("Attempting to fetch sublayer variances for the regulariser, but no specified VarCollector was found.")
+  
+  reg = torch.stack(penalties).mean()  # average over collectors for depth-invariance
+  
+  return reg
+
+
+def mean_SqrReLU(model):
+  """
+  Mean of ReLU(X-1)**2 where X is variance
+  """
+  which_collectors = (  # Use collectors just before normalisation
+            # "coll_attn_in", 
+            # "coll_attn_out", 
+            "coll_attn_add",
+            # "coll_mlp_in",  
+            # "coll_mlp_out",  
+            "coll_mlp_add",
+        )
+  penalties = []
+  for layer in model.layers:
+    for name in which_collectors:
+      coll = getattr(layer, name, None)
+      if coll is not None:
+        penalty = F.relu(coll.last_var - 1.0)
+        penalty = torch.square(penalty).mean()
         penalties.append(penalty)
 
   if not penalties:

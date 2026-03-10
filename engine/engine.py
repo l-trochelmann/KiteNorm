@@ -124,8 +124,10 @@ class TorchEngine(torch.nn.Module):
           reg = regs.mean_LogLin(self.model)
         elif self.regulariser == "mean_LogSqr":
           reg = regs.mean_LogSqr(self.model)
-        elif self.regulariser == "mean_norm_var":
-          reg = regs.mean_norm_var(self.model)
+        elif self.regulariser == "mean_ReLU":
+          reg = regs.mean_ReLU(self.model)
+        elif self.regulariser == "mean_SqrReLU":
+          reg = regs.mean_SqrReLU(self.model)
         else:
           raise ValueError(f"Unknown regulariser: {self.regulariser}")
         reg_term = self.reg_strength * reg
