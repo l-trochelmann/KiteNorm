@@ -26,6 +26,9 @@ class ModelConfig:
     attn_style: str
     ln_use_shift: bool = False
     mlp: str = 'mlp'
+    skip_scale_first_layer: float = -2
+    res_scale_first_layer: float = -2
+    omit_outer_norm_first_sublayer: bool = False
     rmsorm_eps: float = 1e-6
     tie_embeddings: bool = False
     qknorm_L97: int = 2024
@@ -386,22 +389,28 @@ class Block_PostGLUNorm(nn.Module):
         return x
     
 
-class Block_KEEL(nn.Module):
-    """
-    KEEL block following https://arxiv.org/pdf/2601.19895
-    """
+class Block_DoubleNorm(nn.Module):
+    """ pre- and post-normalisation as proposed in https://arxiv.org/pdf/2601.19895 """
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.layer_id = layer_id
-        self.alpha = 2.0 * cfg.n_layers
 
         self.attn = _get_attn(cfg)
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
 
+        # two norms per sublayer
         self.attn_norm_in  = _get_ln_variant(cfg)
         self.attn_norm_out = _get_ln_variant(cfg)
         self.mlp_norm_in   = _get_ln_variant(cfg)
         self.mlp_norm_out  = _get_ln_variant(cfg)
+
+        self.skip_scale = cfg.skip_scale
+        self.res_scale = cfg.res_scale
+
+        # config-driven exceptions
+        self.skip_scale_first_layer = cfg.skip_scale_first_layer
+        self.res_scale_first_layer = cfg.res_scale_first_layer 
+        self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
 
         self.track_var = cfg.track_var
         if self.track_var:
@@ -412,35 +421,54 @@ class Block_KEEL(nn.Module):
             self.coll_mlp_out  = VarCollector()
             self.coll_mlp_add  = VarCollector()
 
-    def forward(self, x, freqs_cis):
-        # attn
-        a_attn = 1.0 if self.layer_id == 0 else self.alpha  # omit alpha in first layer
+    def _scales(self):
+        """Return (skip_scale, res_scale) after applying layer-0 overrides if configured."""
+        s_skip, s_res = self.skip_scale, self.res_scale
+        if self.layer_id == 0:
+            if self.skip_scale_first_layer != -2:
+                s_skip = self.skip_scale_first_layer
+            if self.res_scale_first_layer != -2:
+                s_res = self.res_scale_first_layer
+        return s_skip, s_res
 
+    def _mix(self, x_in, x_out, skip_scale, res_scale):
+        if skip_scale != -1:
+            x_in = skip_scale * x_in
+        if res_scale != -1:
+            x_out = res_scale * x_out
+        return x_in + x_out
+
+    def forward(self, x, freqs_cis):
+        skip_scale, res_scale = self._scales()
+
+        # attn sublayer
         if self.track_var:
             x_in = x
             self.coll_attn_in.calc_var(x_in)
             x_out = self.attn(self.attn_norm_in(x_in), freqs_cis)
             self.coll_attn_out.calc_var(x_out)
-            x_add = a_attn * x_in + x_out
+            x_add = self._mix(x_in, x_out, skip_scale, res_scale)
             self.coll_attn_add.calc_var(x_add)
         else:
-            x_add = a_attn * x + self.attn(self.attn_norm_in(x), freqs_cis)
+            x_add = self._mix(x, self.attn(self.attn_norm_in(x), freqs_cis), skip_scale, res_scale)
 
-        x = x_add if self.layer_id == 0 else self.attn_norm_out(x_add)  # omit outer LN for the very first sublayer
+        # omit outer LN for very first sublayer if requested
+        if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+            x = x_add
+        else:
+            x = self.attn_norm_out(x_add)
 
-        # mlp
-        a_mlp = 1.0 if self.layer_id == 0 else self.alpha  # omit alpha in first layer
-
+        # mlp sublayer
         if self.track_var:
             x_in = x
             self.coll_mlp_in.calc_var(x_in)
             x_out = self.mlp(self.mlp_norm_in(x_in))
             self.coll_mlp_out.calc_var(x_out)
-            x_add = a_mlp * x_in + x_out
+            x_add = self._mix(x_in, x_out, skip_scale, res_scale)
             self.coll_mlp_add.calc_var(x_add)
             x = self.mlp_norm_out(x_add)
         else:
-            x = self.mlp_norm_out(a_mlp * x + self.mlp(self.mlp_norm_in(x)))
+            x = self.mlp_norm_out(self._mix(x, self.mlp(self.mlp_norm_in(x)), skip_scale, res_scale))
 
         return x
 
@@ -461,8 +489,8 @@ class Transformer(nn.Module):
             self.out_norm = _get_ln_variant(cfg)
         elif ln_config == 'post-norm':
             self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif ln_config == "keel":
-            self.layers = nn.ModuleList([Block_KEEL(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == "double-norm":
+            self.layers = nn.ModuleList([Block_DoubleNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'pre-attn-norm':  # ABLATION
             self.layers = nn.ModuleList([Block_PreAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
             self.out_norm = _get_ln_variant(cfg)
@@ -476,7 +504,7 @@ class Transformer(nn.Module):
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'keel', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
