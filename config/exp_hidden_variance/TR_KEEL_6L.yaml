@@ -26,10 +26,13 @@ tie_embeddings: False
 torch_compile: True
 
 weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale', 'xavier_res-scale', 'xavier_no-scale', 't-fixup', (ablations: 'gpt2_glu-scale', 'gpt2_attn_scale')
-skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
+skip_scale: 12.0  # -1 for no rescaling. 1 retrieves standard contribution.
 res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
+omit_outer_norm_first_sublayer: True
+skip_scale_first_layer: -1           # -2 for no override. -1 to disable
+res_scale_first_layer: -2            # -2 for no override. -1 to disable
 
-ln_config: 'keel'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'keel' (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop')
+ln_config: 'double-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm' (ablations: 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm', 'pre-norm-drop', 'post-norm-drop')
 ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm'
 drop_which_ln: 0  # Which ln to drop if using 'pre-norm-drop' or 'post-norm-drop', choose from -1, 0, ...,  n_layers-1 (-1: out_norm)
@@ -73,8 +76,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_KEEL_6L'
-exp_name: 'TR_KEEL_6L'
+wandb_run_name: 'TR_KEEL_6L_refactor'
+exp_name: 'TR_KEEL_6L_refactor'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: True
