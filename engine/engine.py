@@ -115,19 +115,25 @@ class TorchEngine(torch.nn.Module):
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
 
       if self.regulariser:
+        reg_model = self.model
+        if hasattr(reg_model, "_orig_mod"):
+          reg_model = reg_model._orig_mod
+        if isinstance(reg_model, DDP):
+          reg_model = reg_model.module
+
         reg_term = None
         if self.regulariser == "mean_L1":
-          reg = regs.mean_L1(self.model)
+          reg = regs.mean_L1(reg_model)
         elif self.regulariser == "mean_L2":
-          reg = regs.mean_L2(self.model)
+          reg = regs.mean_L2(reg_model)
         elif self.regulariser == "mean_LogLin":
-          reg = regs.mean_LogLin(self.model)
+          reg = regs.mean_LogLin(reg_model)
         elif self.regulariser == "mean_LogSqr":
-          reg = regs.mean_LogSqr(self.model)
+          reg = regs.mean_LogSqr(reg_model)
         elif self.regulariser == "mean_ReLU":
-          reg = regs.mean_ReLU(self.model)
+          reg = regs.mean_ReLU(reg_model)
         elif self.regulariser == "mean_SqrReLU":
-          reg = regs.mean_SqrReLU(self.model)
+          reg = regs.mean_SqrReLU(reg_model)
         else:
           raise ValueError(f"Unknown regulariser: {self.regulariser}")
         reg_term = self.reg_strength * reg
@@ -202,8 +208,8 @@ class TorchEngine(torch.nn.Module):
       num_batches_tensor = torch.tensor([num_batches], device=self.device, dtype=torch.int)
       dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
       dist.all_reduce(num_batches_tensor, op=dist.ReduceOp.SUM)
-      total_loss = total_loss_tensor.item() / dist.get_world_size()
-      num_batches = num_batches_tensor.item() // dist.get_world_size() # superflous if drop_last=True in dataloader
+      total_loss = total_loss_tensor.item()
+      num_batches = num_batches_tensor.item()
 
     # calculate average loss
     avg_loss = total_loss / num_batches

@@ -14,12 +14,12 @@ def pytorch_setup(cfg):
   ddp = int(os.environ.get('RANK', -1)) != -1  # check if DDP is enabled
 
   if ddp:
-    init_process_group(backend='nccl')
     rank = int(os.environ['RANK'])
     local_rank = int(os.environ['LOCAL_RANK'])
     world_size = int(os.environ['WORLD_SIZE'])
+    torch.cuda.set_device(local_rank)
+    init_process_group(backend='nccl')
     device = f'cuda:{local_rank}'
-    torch.cuda.device(device)
     master_process = (rank == 0)
     seed_offset = rank
   else:

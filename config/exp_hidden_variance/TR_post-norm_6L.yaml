@@ -83,8 +83,9 @@ track_model_update: False
 track_grad_norm: True
 track_param_update: True
 track_softmax: False
-track_ln_weights: False
+track_ln_weights: True
 track_sublayer_variance: True
+track_sublayer_kurtosis: True
 
 resume: False
 resume_step: null

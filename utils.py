@@ -195,8 +195,18 @@ def get_softmax_entropy(model):
   """Retrieves mean entropy of the softmax activations over the validation set for each layer."""
   softmax_entropies = {}
   model.eval()
+
+  ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+
   for layer in model.layers:
-    layer_softmax_entropy = layer.attn.entropy_sum / layer.attn.entropy_count
+    entropy_sum = layer.attn.entropy_sum.clone()
+    entropy_count = layer.attn.entropy_count.clone()
+
+    if ddp:
+      torch.distributed.all_reduce(entropy_sum, op=torch.distributed.ReduceOp.SUM)
+      torch.distributed.all_reduce(entropy_count, op=torch.distributed.ReduceOp.SUM)
+
+    layer_softmax_entropy = entropy_sum / entropy_count
     softmax_entropies[f"softmax_entropy/{layer.layer_id}"] = layer_softmax_entropy.item()
 
     layer.attn.entropy_sum.zero_()  # Reset running average before the next val pass
@@ -246,6 +256,8 @@ def get_sublayer_variance(model, cfg):
     hidden_variances = {}
     model.eval()
 
+    ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+
     skip_scale = cfg.skip_scale
     res_scale = cfg.res_scale
 
@@ -261,13 +273,20 @@ def get_sublayer_variance(model, cfg):
         raw_avg = {}
         for attr in collector_attrs:
             coll = getattr(layer, attr)
-            count = coll.running_count_1.item()
-            avg = (coll.running_var_sum / coll.running_count_1).item() if count > 0 else float("nan")
+
+            var_sum = coll.running_var_sum.clone()
+            count = coll.running_count_1.clone()
+
+            if ddp:
+                torch.distributed.all_reduce(var_sum, op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(count, op=torch.distributed.ReduceOp.SUM)
+
+            avg = (var_sum / count).item() if count.item() > 0 else float("nan")
             raw_avg[attr] = avg
 
             name = attr.replace("coll_", "").replace("_", "-")
             hidden_variances[f"hidden_variance_{name}/{lid}"] = avg
-            
+
             coll.running_var_sum.zero_()
             coll.running_count_1.zero_()
 
@@ -285,9 +304,12 @@ def get_sublayer_variance(model, cfg):
 def get_sublayer_kurtosis(model):
     """
     Like get_sublayer_variance, but to retrieve kurtosis.
+    Supports DDP by reducing sums and counts across ranks.
     """
     hidden_kurtosis = {}
     model.eval()
+
+    ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
 
     collector_attrs = (
         "coll_attn_in", "coll_attn_out", "coll_attn_add",
@@ -298,36 +320,69 @@ def get_sublayer_kurtosis(model):
         lid = layer.layer_id
 
         # Fetch and log collected kurtosis
-        raw_avg = {}
         for attr in collector_attrs:
             coll = getattr(layer, attr)
-            count = coll.running_count_2.item()
-            avg = (coll.running_kurtosis_sum / coll.running_count_2).item() if count > 0 else float("nan")
-            raw_avg[attr] = avg
+
+            kurtosis_sum = coll.running_kurtosis_sum.clone()
+            count = coll.running_count_2.clone()
+
+            if ddp:
+                torch.distributed.all_reduce(kurtosis_sum, op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(count, op=torch.distributed.ReduceOp.SUM)
+
+            avg = (kurtosis_sum / count).item() if count.item() > 0 else float("nan")
 
             name = attr.replace("coll_", "").replace("_", "-")
             hidden_kurtosis[f"hidden_kurtosis_{name}/{lid}"] = avg
-            
+
             coll.running_kurtosis_sum.zero_()
             coll.running_count_2.zero_()
 
     return hidden_kurtosis
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None):
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None, master_process=True):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
-  # NOTE: train_losses is an array of losses, if DDP, this is from master_process only
-  # NOTE: valid_loss is a float, already reduced across GPUs
+  # NOTE: valid_loss is already reduced across GPUs in engine.eval()
 
+  ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+
+  train_loss = None
   if isinstance(train_losses, list):
-    train_loss = torch.stack(train_losses).mean().item() # avg loss
+    train_loss = torch.stack(train_losses).mean()
+    if ddp:
+      torch.distributed.all_reduce(train_loss, op=torch.distributed.ReduceOp.SUM)
+      train_loss = train_loss / world_size
+    train_loss = train_loss.item()
+
+  reg_term_log = None
+  if reg_term is not None:
+    reg_term_log = reg_term.detach().clone()
+    if ddp:
+      torch.distributed.all_reduce(reg_term_log, op=torch.distributed.ReduceOp.SUM)
+      reg_term_log = reg_term_log / world_size
+
+  softmax_entropies = None
+  if cfg.track_softmax and valid_loss is not None:
+    softmax_entropies = get_softmax_entropy(model)
+
+  sublayer_variances = None
+  if cfg.track_sublayer_variance and valid_loss is not None:
+    sublayer_variances = get_sublayer_variance(model, cfg)
+
+  sublayer_kurtosis = None
+  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
+    sublayer_kurtosis = get_sublayer_kurtosis(model)
+
+  if not master_process:
+    return
 
   new_metrics = {
     "micro_step": micro_step,
     "step": int(micro_step / cfg.grad_accumulation_steps),
     "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
     "lr": optimizer.param_groups[0].get("lr", float("NaN")),
-    "train/reg_term": reg_term.item() if reg_term is not None else None,
+    "train/reg_term": reg_term_log.item() if reg_term_log is not None else None,
     "train/loss": train_loss,
     "train/ppl": math.exp(train_loss) if train_loss < 709.78 else float("inf"),
   }
@@ -354,20 +409,18 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     new_metrics.update(pu_l2)
     new_metrics.update(pu_cos)
 
-  # Add softmax entropy metrics if requested, only following a validation pass
-  if cfg.track_softmax and valid_loss is not None:
-    new_metrics.update(get_softmax_entropy(model))
-
   # Add LN weights metrics if requested
   if cfg.track_ln_weights:
     new_metrics.update(get_ln_param_stats(model))
-  
-  # Add sublayer hidden state metrics if requested, only following a validation pass
-  if cfg.track_sublayer_variance and valid_loss is not None:
-    new_metrics.update(get_sublayer_variance(model, cfg))
-  
-  if cfg.track_sublayer_kurtosis and valid_loss is not None:
-    new_metrics.update(get_sublayer_kurtosis(model))
+
+  if softmax_entropies is not None:
+    new_metrics.update(softmax_entropies)
+
+  if sublayer_variances is not None:
+    new_metrics.update(sublayer_variances)
+
+  if sublayer_kurtosis is not None:
+    new_metrics.update(sublayer_kurtosis)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)

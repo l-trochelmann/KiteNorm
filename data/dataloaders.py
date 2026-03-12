@@ -39,10 +39,7 @@ def get_dataloaders(cfg, start_step: int = 0):
     if not isinstance(valid_set, Dataset):
       raise ValueError("'dataset' should be a datasets.Dataset")
 
-    if dist.is_initialized():
-      valid_sampler = DistributedSampler(valid_set, drop_last=True)
-    else:
-      valid_sampler = SequentialSampler(valid_set)
+    valid_sampler = SequentialSampler(valid_set)
       
     validloader = DataLoader(
       valid_set,
@@ -71,7 +68,12 @@ def _get_sampler(train_set, cfg, start_step):
       sampler = StatefulSequentialSampler(train_set, batch_size=cfg.micro_batch_size, start_idx=start_step)
   else:
     if ddp:
-      sampler = DistributedSampler(train_set, drop_last=True)
+      sampler = DistributedSampler(
+        train_set,
+        shuffle = (cfg.sampler == 'random'),
+        seed = cfg.sampler_seed if cfg.sampler_seed is not None else 0,
+        drop_last = True,
+      )
     else:
       sampler = SequentialSampler(train_set)  # equivalent to StatefulSequentialSampler(..., start_idx=0)
   

@@ -44,7 +44,7 @@ def main(_):
   ckpt, micro_step_start = maybe_load_checkpoint(cfg, device)
 
   # Dataset
-  trainloader, validloader = get_dataloaders(cfg)
+  trainloader, validloader = get_dataloaders(cfg, micro_step_start)
   
   # Model
   model, model_cfg = construct_model(cfg)
@@ -124,9 +124,9 @@ def main(_):
   
     # Log
     if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
-      if master_process:
-        utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-                  probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term)
+      utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
+                probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,
+                master_process=master_process)
       if micro_step != 1:
         train_losses = []
 
@@ -141,44 +141,39 @@ def main(_):
 
   # End of training: final eval, log and save checkpoint
   print_master(f"=== Training Completed! ===")
-  if master_process:
-    if cfg.eval:
-      print_master("Evaluating on validation set (final)")
-      if cfg.track_softmax:  # Enable running average before eval
-        for layer in model.layers:
-          layer.attn.track_entropy = True
+  valid_loss = None
 
-      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Enable running averages before eval
-        collector_attrs = (
-            "coll_attn_in", "coll_attn_out", "coll_attn_add",
-            "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
-        )
-        for layer in model.layers:
-            for attr in collector_attrs:
-                if cfg.track_sublayer_variance:
-                  getattr(layer, attr).track_variance = True
-                if cfg.track_sublayer_kurtosis:
-                  getattr(layer, attr).track_kurtosis = True
+  if cfg.eval:
+    print_master("Evaluating on validation set (final)")
+    if cfg.track_softmax:  # Enable running average before eval
+      for layer in model.layers:
+        layer.attn.track_entropy = True
 
+    if cfg.track_sublayer_variance:  # Enable running averages before eval
+      collector_attrs = (
+          "coll_attn_in", "coll_attn_out", "coll_attn_add",
+          "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
+      )
+      for layer in model.layers:
+          for attr in collector_attrs:
+              getattr(layer, attr).track_variance = True
 
-      valid_loss = engine.eval(validloader)  # Run eval
+    valid_loss = engine.eval(validloader)  # Run eval
 
-      if cfg.track_softmax:  # Disable running average after eval
-        for layer in model.layers:
-          layer.attn.track_entropy = False
+    if cfg.track_softmax:  # Disable running average after eval
+      for layer in model.layers:
+        layer.attn.track_entropy = False
 
-      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Disable running averages after eval
-        for layer in model.layers:
-            for attr in collector_attrs:
-                if cfg.track_sublayer_variance:
-                  getattr(layer, attr).track_variance = False
-                if cfg.track_sublayer_kurtosis:
-                  getattr(layer, attr).track_kurtosis = False
+    if cfg.track_sublayer_variance:  # Disable running averages after eval
+      for layer in model.layers:
+          for attr in collector_attrs:
+              getattr(layer, attr).track_variance = False
 
-    utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-              probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term)
-    if cfg.save_last_checkpoint:
-      save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
+  utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
+            probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,
+            master_process=master_process)
+  if master_process and cfg.save_last_checkpoint:
+    save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 
   print_master(f"=== Terminating... ===")
 
