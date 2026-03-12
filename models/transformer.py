@@ -198,6 +198,9 @@ class Block_NoNorm(nn.Module):
         self.skip_scale = cfg.skip_scale
         self.res_scale = cfg.res_scale
 
+        self.skip_scale_first_layer = cfg.skip_scale_first_layer
+        self.res_scale_first_layer = cfg.res_scale_first_layer
+
         self.track_var = cfg.track_var
         if self.track_var:
             self.coll_attn_in  = VarCollector()
@@ -207,18 +210,28 @@ class Block_NoNorm(nn.Module):
             self.coll_mlp_out  = VarCollector()
             self.coll_mlp_add  = VarCollector()
 
-    def _mix(self, x_in, x_out):
-        if self.skip_scale != -1:
-            x_in = self.skip_scale * x_in
-        if self.res_scale != -1:
-            x_out = self.res_scale * x_out
+    def _scales(self):
+        s_skip, s_res = self.skip_scale, self.res_scale
+        if self.layer_id == 0:
+            if self.skip_scale_first_layer != -2:
+                s_skip = self.skip_scale_first_layer
+            if self.res_scale_first_layer != -2:
+                s_res = self.res_scale_first_layer
+        return s_skip, s_res
+
+    def _mix(self, x_in, x_out, skip_scale, res_scale):
+        if skip_scale != -1:
+            x_in = skip_scale * x_in
+        if res_scale != -1:
+            x_out = res_scale * x_out
         return x_in + x_out
 
     def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
+        skip_scale, res_scale = self._scales()
+
         if not self.track_var:
-            x = self._mix(x, self.attn(x, freqs_cis))
-            x = self._mix(x, self.mlp(x))
+            x = self._mix(x, self.attn(x, freqs_cis), skip_scale, res_scale)
+            x = self._mix(x, self.mlp(x),           skip_scale, res_scale)
             return x
 
         # attn
@@ -226,7 +239,7 @@ class Block_NoNorm(nn.Module):
         self.coll_attn_in.calc_var(x_in)
         x_out = self.attn(x_in, freqs_cis)
         self.coll_attn_out.calc_var(x_out)
-        x_add = self._mix(x_in, x_out)
+        x_add = self._mix(x_in, x_out, skip_scale, res_scale)
         self.coll_attn_add.calc_var(x_add)
 
         # mlp
@@ -234,7 +247,7 @@ class Block_NoNorm(nn.Module):
         self.coll_mlp_in.calc_var(x_in)
         x_out = self.mlp(x_in)
         self.coll_mlp_out.calc_var(x_out)
-        x_add = self._mix(x_in, x_out)
+        x_add = self._mix(x_in, x_out, skip_scale, res_scale)
         self.coll_mlp_add.calc_var(x_add)
 
         return x_add
@@ -297,11 +310,42 @@ class Block_PreNorm(NormBlock):
 
 
 class Block_PostNorm(NormBlock):
+    def __init__(self, layer_id: int, cfg: ModelConfig):
+        super().__init__(layer_id, cfg)
+        self.skip_scale_first_layer = cfg.skip_scale_first_layer
+        self.res_scale_first_layer = cfg.res_scale_first_layer
+        self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
+
+    def _scales(self):
+        s_skip, s_res = self.skip_scale, self.res_scale
+        if self.layer_id == 0:
+            if self.skip_scale_first_layer != -2:
+                s_skip = self.skip_scale_first_layer
+            if self.res_scale_first_layer != -2:
+                s_res = self.res_scale_first_layer
+        return s_skip, s_res
+
+    def _mix2(self, x_in, x_out, skip_scale, res_scale):
+        if skip_scale != -1:
+            x_in = skip_scale * x_in
+        if res_scale != -1:
+            x_out = res_scale * x_out
+        return x_in + x_out
+
     def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
+        skip_scale, res_scale = self._scales()
+
         if not self.track_var:
-            x = self.attn_norm(self._mix(x, self.attn(x, freqs_cis)))
-            x = self.mlp_norm(self._mix(x, self.mlp(x)))
+            # attn sublayer
+            x_add = self._mix2(x, self.attn(x, freqs_cis), skip_scale, res_scale)
+            if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+                x = x_add
+            else:
+                x = self.attn_norm(x_add)
+
+            # mlp sublayer
+            x_add = self._mix2(x, self.mlp(x), skip_scale, res_scale)
+            x = self.mlp_norm(x_add)
             return x
 
         # attn
@@ -309,16 +353,20 @@ class Block_PostNorm(NormBlock):
         self.coll_attn_in.calc_var(x_in)
         x_out = self.attn(x_in, freqs_cis)
         self.coll_attn_out.calc_var(x_out)
-        x_add = self._mix(x_in, x_out)
+        x_add = self._mix2(x_in, x_out, skip_scale, res_scale)
         self.coll_attn_add.calc_var(x_add)
-        x_norm = self.attn_norm(x_add)
+
+        if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+            x_norm = x_add
+        else:
+            x_norm = self.attn_norm(x_add)
 
         # mlp
         x_in = x_norm
         self.coll_mlp_in.calc_var(x_in)
         x_out = self.mlp(x_in)
         self.coll_mlp_out.calc_var(x_out)
-        x_add = self._mix(x_in, x_out)
+        x_add = self._mix2(x_in, x_out, skip_scale, res_scale)
         self.coll_mlp_add.calc_var(x_add)
         x_norm = self.mlp_norm(x_add)
 
