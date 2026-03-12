@@ -10,10 +10,15 @@ class VarCollector(nn.Module):
         super().__init__()
         self.last_var = None
         self.regularise = False
+        self.eps = 1.e-8
 
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
-        self.register_buffer("running_count", torch.zeros(1))
+        self.register_buffer("running_count_1", torch.zeros(1))
+
+        self.track_kurtosis = False  # While True, keeps a running average over the input kurtosis
+        self.register_buffer("running_kurtosis_sum", torch.zeros(1))
+        self.register_buffer("running_count_2", torch.zeros(1))
 
     def calc_var(self, input):
         var = input.var(dim=-1, unbiased=False, keepdim=True)
@@ -26,7 +31,16 @@ class VarCollector(nn.Module):
         if self.track_variance:
             current_var = var.float().detach().mean().item()
             self.running_var_sum += current_var
-            self.running_count += 1
+            self.running_count_1 += 1
+        
+        if self.track_kurtosis:
+            mean = input.mean(dim=-1, keepdim=True)
+            y = (input - mean) * torch.rsqrt(var + self.eps)
+            kurtosis = y.pow(4).mean(dim=-1, keepdim=True)
+
+            current_kurtosis = kurtosis.float().detach().mean().item()
+            self.running_kurtosis_sum += current_kurtosis
+            self.running_count_2 += 1
 
         return
 

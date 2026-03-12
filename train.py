@@ -96,14 +96,17 @@ def main(_):
         for layer in model.layers:
           layer.attn.track_entropy = True
 
-      if cfg.track_sublayer_variance:  # Enable running averages before eval
+      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Enable running averages before eval
         collector_attrs = (
             "coll_attn_in", "coll_attn_out", "coll_attn_add",
             "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
         )
         for layer in model.layers:
             for attr in collector_attrs:
-                getattr(layer, attr).track_variance = True
+                if cfg.track_sublayer_variance:
+                  getattr(layer, attr).track_variance = True
+                if cfg.track_sublayer_kurtosis:
+                  getattr(layer, attr).track_kurtosis = True
 
       valid_loss = engine.eval(validloader)  # Run eval
 
@@ -111,10 +114,13 @@ def main(_):
         for layer in model.layers:
           layer.attn.track_entropy = False
 
-      if cfg.track_sublayer_variance:  # Disable running averages after eval
+      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Disable running averages after eval
         for layer in model.layers:
             for attr in collector_attrs:
-                getattr(layer, attr).track_variance = False
+                if cfg.track_sublayer_variance:
+                  getattr(layer, attr).track_variance = False
+                if cfg.track_sublayer_kurtosis:
+                  getattr(layer, attr).track_kurtosis = False
   
     # Log
     if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
@@ -142,14 +148,18 @@ def main(_):
         for layer in model.layers:
           layer.attn.track_entropy = True
 
-      if cfg.track_sublayer_variance:  # Enable running averages before eval
+      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Enable running averages before eval
         collector_attrs = (
             "coll_attn_in", "coll_attn_out", "coll_attn_add",
             "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
         )
         for layer in model.layers:
             for attr in collector_attrs:
-                getattr(layer, attr).track_variance = True
+                if cfg.track_sublayer_variance:
+                  getattr(layer, attr).track_variance = True
+                if cfg.track_sublayer_kurtosis:
+                  getattr(layer, attr).track_kurtosis = True
+
 
       valid_loss = engine.eval(validloader)  # Run eval
 
@@ -157,10 +167,13 @@ def main(_):
         for layer in model.layers:
           layer.attn.track_entropy = False
 
-      if cfg.track_sublayer_variance:  # Disable running averages after eval
+      if cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis:  # Disable running averages after eval
         for layer in model.layers:
             for attr in collector_attrs:
-                getattr(layer, attr).track_variance = False
+                if cfg.track_sublayer_variance:
+                  getattr(layer, attr).track_variance = False
+                if cfg.track_sublayer_kurtosis:
+                  getattr(layer, attr).track_kurtosis = False
 
     utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
               probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term)

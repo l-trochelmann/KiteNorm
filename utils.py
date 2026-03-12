@@ -261,15 +261,15 @@ def get_sublayer_variance(model, cfg):
         raw_avg = {}
         for attr in collector_attrs:
             coll = getattr(layer, attr)
-            count = coll.running_count.item()
-            avg = (coll.running_var_sum / coll.running_count).item() if count > 0 else float("nan")
+            count = coll.running_count_1.item()
+            avg = (coll.running_var_sum / coll.running_count_1).item() if count > 0 else float("nan")
             raw_avg[attr] = avg
 
             name = attr.replace("coll_", "").replace("_", "-")
             hidden_variances[f"hidden_variance_{name}/{lid}"] = avg
             
             coll.running_var_sum.zero_()
-            coll.running_count.zero_()
+            coll.running_count_1.zero_()
 
         # Log rescaled vars if they exist
         if skip_scale != -1:
@@ -280,6 +280,38 @@ def get_sublayer_variance(model, cfg):
           hidden_variances[f"hidden_variance_mlp-out_scaled-res/{lid}"]   = res_scale**2  * raw_avg["coll_mlp_out"]
 
     return hidden_variances
+
+
+def get_sublayer_kurtosis(model):
+    """
+    Like get_sublayer_variance, but to retrieve kurtosis.
+    """
+    hidden_kurtosis = {}
+    model.eval()
+
+    collector_attrs = (
+        "coll_attn_in", "coll_attn_out", "coll_attn_add",
+        "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
+    )
+
+    for layer in model.layers:
+        lid = layer.layer_id
+
+        # Fetch and log collected kurtosis
+        raw_avg = {}
+        for attr in collector_attrs:
+            coll = getattr(layer, attr)
+            count = coll.running_count_2.item()
+            avg = (coll.running_kurtosis_sum / coll.running_count_2).item() if count > 0 else float("nan")
+            raw_avg[attr] = avg
+
+            name = attr.replace("coll_", "").replace("_", "-")
+            hidden_kurtosis[f"hidden_kurtosis_{name}/{lid}"] = avg
+            
+            coll.running_kurtosis_sum.zero_()
+            coll.running_count_2.zero_()
+
+    return hidden_kurtosis
 
 
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None):
@@ -333,6 +365,9 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   # Add sublayer hidden state metrics if requested, only following a validation pass
   if cfg.track_sublayer_variance and valid_loss is not None:
     new_metrics.update(get_sublayer_variance(model, cfg))
+  
+  if cfg.track_sublayer_kurtosis and valid_loss is not None:
+    new_metrics.update(get_sublayer_kurtosis(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
