@@ -317,6 +317,9 @@ class Block_PostNorm(NormBlock):
         self.res_scale_first_layer = cfg.res_scale_first_layer
         self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
 
+        if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+            self.attn_norm = None
+
     def _scales(self):
         s_skip, s_res = self.skip_scale, self.res_scale
         if self.layer_id == 0:
@@ -339,7 +342,7 @@ class Block_PostNorm(NormBlock):
         if not self.track_var:
             # attn sublayer
             x_add = self._mix2(x, self.attn(x, freqs_cis), skip_scale, res_scale)
-            if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+            if self.attn_norm is None:
                 x = x_add
             else:
                 x = self.attn_norm(x_add)
@@ -357,7 +360,7 @@ class Block_PostNorm(NormBlock):
         x_add = self._mix2(x_in, x_out, skip_scale, res_scale)
         self.coll_attn_add.calc_var(x_add)
 
-        if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+        if self.attn_norm is None:
             x_norm = x_add
         else:
             x_norm = self.attn_norm(x_add)
@@ -372,7 +375,7 @@ class Block_PostNorm(NormBlock):
         x_norm = self.mlp_norm(x_add)
 
         return x_norm
-    
+
 
 class Block_DoubleNorm(nn.Module):
     """ pre- and post-normalisation as proposed in https://arxiv.org/pdf/2601.19895 """
@@ -385,7 +388,7 @@ class Block_DoubleNorm(nn.Module):
 
         # two norms per sublayer
         self.attn_norm_in  = _get_ln_variant(cfg)
-        self.attn_norm_out = _get_ln_variant(cfg)
+        self.attn_norm_out = None if (cfg.omit_outer_norm_first_sublayer and layer_id == 0) else _get_ln_variant(cfg)
         self.mlp_norm_in   = _get_ln_variant(cfg)
         self.mlp_norm_out  = _get_ln_variant(cfg)
 
@@ -437,8 +440,7 @@ class Block_DoubleNorm(nn.Module):
         else:
             x_add = self._mix(x, self.attn(self.attn_norm_in(x), freqs_cis), skip_scale, res_scale)
 
-        # omit outer LN for very first sublayer if requested
-        if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
+        if self.attn_norm_out is None:
             x = x_add
         else:
             x = self.attn_norm_out(x_add)
