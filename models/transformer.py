@@ -188,6 +188,7 @@ class QKNormAttention(Attention):
 
         return self.w_out(out)
 
+
 class Block_NoNorm(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
@@ -371,70 +372,6 @@ class Block_PostNorm(NormBlock):
         x_norm = self.mlp_norm(x_add)
 
         return x_norm
-
-
-class Block_PreAttnNorm(nn.Module):
-    """ABLATION: In pre-LN, drop MLP norm"""
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.attn_norm = _get_ln_variant(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.layer_id = layer_id
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = x + self.attn(self.attn_norm(x), freqs_cis)
-        x = x + self.mlp(x)
-        return x
-
-
-class Block_PreGLUNorm(nn.Module):
-    """ABLATION: In pre-LN, drop Attn norm"""
-
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = _get_ln_variant(cfg)
-        self.layer_id = layer_id
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = x + self.attn(x, freqs_cis)
-        x = x + self.mlp(self.mlp_norm(x))
-        return x
-
-
-class Block_PostAttnNorm(nn.Module):
-    """ABLATION: In post-LN, drop MLP norm"""
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.attn_norm = _get_ln_variant(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.layer_id = layer_id
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = self.attn_norm(x + self.attn(x, freqs_cis))
-        x = x + self.mlp(x)
-        return x
-
-
-class Block_PostGLUNorm(nn.Module):
-    def __init__(self, layer_id: int, cfg: ModelConfig):
-        super().__init__()
-        self.attn = _get_attn(cfg)
-        self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = _get_ln_variant(cfg)
-        self.layer_id = layer_id
-
-    def forward(self, x, freqs_cis):
-        # x: (bsz, seqlen, dim)
-        x = x + self.attn(x, freqs_cis)
-        x = self.mlp_norm(x + self.mlp(x))
-        return x
     
 
 class Block_DoubleNorm(nn.Module):
@@ -539,20 +476,10 @@ class Transformer(nn.Module):
             self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == "double-norm":
             self.layers = nn.ModuleList([Block_DoubleNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif ln_config == 'pre-attn-norm':  # ABLATION
-            self.layers = nn.ModuleList([Block_PreAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = _get_ln_variant(cfg)
-        elif ln_config == 'pre-glu-norm':  # ABLATION
-            self.layers = nn.ModuleList([Block_PreGLUNorm(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = _get_ln_variant(cfg)
-        elif ln_config == 'post-attn-norm':  # ABLATION
-            self.layers = nn.ModuleList([Block_PostAttnNorm(idx, cfg) for idx in range(cfg.n_layers)])
-        elif ln_config == 'post-glu-norm':  # ABLATION
-            self.layers = nn.ModuleList([Block_PostGLUNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm', 'pre-attn-norm', 'pre-glu-norm', 'post-attn-norm', 'post-glu-norm'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -575,7 +502,7 @@ class Transformer(nn.Module):
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
-        if self.weight_init in ('gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'):
+        if self.weight_init in ('gpt2_res-scale', 'gpt2_no-scale'):
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
@@ -583,7 +510,7 @@ class Transformer(nn.Module):
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         else:
-            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'")
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale'")
 
     def _scale_residual_branches(self):
         if self.weight_init in ('gpt2_res-scale'):
@@ -595,18 +522,8 @@ class Transformer(nn.Module):
                         p.mul_(1/math.sqrt(2 * self.n_layers))
         elif self.weight_init in ('gpt2_no-scale'):
             return  # no residual scaling at initialisation
-        elif self.weight_init == 'gpt2_glu-scale':
-            with torch.no_grad():
-                for n, p in self.named_parameters():
-                    if n.endswith('fc2.weight'): # mlp/glu output layer
-                        p.mul_(1/math.sqrt(2 * self.n_layers))
-        elif self.weight_init == 'gpt2_attn-scale':
-            with torch.no_grad():
-                for n, p in self.named_parameters():
-                    if n.endswith('w_out.weight'): # attn output layer
-                        p.mul_(1/math.sqrt(2 * self.n_layers))
         else:
-            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'gpt2_glu-scale', 'gpt2_attn_scale'")
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale'")
 
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight
