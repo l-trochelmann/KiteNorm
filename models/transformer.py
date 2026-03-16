@@ -34,6 +34,7 @@ class ModelConfig:
     qknorm_L97: int = 2024
     compile: bool = True
     track_var: bool = False
+    embedding_norm: bool = False
 
 
 MLP_CLASSES = {
@@ -469,6 +470,7 @@ class Transformer(nn.Module):
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
+        self.embed_norm = _get_ln_variant(cfg) if cfg.embedding_norm else None
         self.out_norm = None
         ln_config = cfg.ln_config.lower()
         if ln_config == 'pre-norm':
@@ -495,7 +497,9 @@ class Transformer(nn.Module):
 
     def forward(self, x):
         # x: (bsz, seqlen)
-        x = self.embed_tokens(x) # (bsz, seqlen, dim)
+        x = self.embed_tokens(x)  # (bsz, seqlen, dim)
+        if self.embed_norm is not None:
+            x = self.embed_norm(x)
         self.freqs_cis = self.freqs_cis.to(x.device)
         for layer in self.layers:
             x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
