@@ -51,7 +51,7 @@ def _get_ln_variant(cfg, dim=None):
     if style == "layernorm":
         return LayerNorm(dim, bias=cfg.ln_use_shift)
     elif style == "layernorm_simple":
-        return LayerNorm_Simple(dim)
+        return LayerNorm_Simple()
     elif style == "rmsnorm":
         return RMSNorm(dim, cfg.rmsorm_eps)
     elif style == "onlyaffine":
@@ -318,6 +318,9 @@ class Block_PostNorm(NormBlock):
         self.res_scale_first_layer = cfg.res_scale_first_layer
         self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
 
+        self.coll_attn_add.is_before_norm = True
+        self.coll_mlp_add.is_before_norm = True
+
         if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
             self.attn_norm = None
 
@@ -405,10 +408,10 @@ class Block_DoubleNorm(nn.Module):
         if self.track_var:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
-            self.coll_attn_add = VarCollector()
+            self.coll_attn_add = VarCollector(is_before_norm=True)
             self.coll_mlp_in   = VarCollector()
             self.coll_mlp_out  = VarCollector()
-            self.coll_mlp_add  = VarCollector()
+            self.coll_mlp_add  = VarCollector(is_before_norm=True)
 
     def _scales(self):
         """Return (skip_scale, res_scale) after applying layer-0 overrides if configured."""

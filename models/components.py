@@ -6,11 +6,12 @@ from torch import nn
 
 class VarCollector(nn.Module):
     """Keeps track of last computed input variance and a cumulative average. Returns nothing."""
-    def __init__(self):
+    def __init__(self, is_before_norm=False):
         super().__init__()
         self.last_var = None
         self.regularise = False
         self.eps = 1.e-8
+        self.is_before_norm = is_before_norm
 
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
@@ -23,7 +24,7 @@ class VarCollector(nn.Module):
     def calc_var(self, input):
         var = input.var(dim=-1, unbiased=False, keepdim=True)
 
-        if self.regularise:
+        if self.regularise and self.is_before_norm:
             self.last_var = var
         else:
             self.last_var = var.detach()
@@ -52,15 +53,9 @@ class LayerNorm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
         self.eps = 1e-6
 
-        self.keep_last_var = False  # Whether to store the last calculated variance for the regulariser
-        self.last_var = None
-
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
-        var = input.var(dim=-1, unbiased=False, keepdim=True)
-    
-        if self.keep_last_var:
-            self.last_var = var.mean()       
+        var = input.var(dim=-1, unbiased=False, keepdim=True) 
     
         y = (input - mean) * torch.rsqrt(var + self.eps)
     
@@ -72,20 +67,13 @@ class LayerNorm(nn.Module):
 
 class LayerNorm_Simple(nn.Module):
     """Drops both LN parameters as suggested by Xu et al (2019)"""
-    def __init__(self, dim: int):
+    def __init__(self):
         super().__init__()
-        self.normalized_shape = torch.Size([dim])
         self.eps = 1e-6
-
-        self.keep_last_var = False  # Whether to store the last calculated variance for the regulariser
-        self.last_var = None
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
         var = input.var(dim=-1, unbiased=False, keepdim=True)
-
-        if self.keep_last_var:
-            self.last_var = var.mean()
 
         y = (input - mean) * torch.rsqrt(var + self.eps)  # No affine
         return y
