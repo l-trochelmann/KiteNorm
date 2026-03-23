@@ -19,11 +19,27 @@ flags.DEFINE_integer('job_idx', None, 'Job idx for job-array sweeps. From 0 to n
 FLAGS = flags.FLAGS
 
 
+def _resolve_layer_scaled(v, n_layers: int):
+  if isinstance(v, str):
+    s = v.strip().lower().replace(" ", "")
+    if s == "2l":
+      return float(2 * n_layers)
+    if s in {"1/(2l)", "1/2l"}:
+      return 1.0 / float(2 * n_layers)
+  return v
+
+
 def main(_):
   print("=== Prepare Training... ===")
   
   CFG_PATH, JOB_IDX = FLAGS.config, FLAGS.job_idx
   cfg, _ = utils.load_config(CFG_PATH, JOB_IDX)
+
+  # (overcome .yaml limitation: automatic skip scale and res-scale)
+  cfg = cfg._replace(
+    skip_scale=_resolve_layer_scaled(cfg.skip_scale, cfg.n_layers),
+    res_scale=_resolve_layer_scaled(cfg.res_scale, cfg.n_layers),
+  )
   
   local_rank, world_size, device, master_process = pytorch_setup(cfg)
 
