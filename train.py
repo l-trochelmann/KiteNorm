@@ -24,7 +24,9 @@ def _resolve_layer_scaled(v, n_layers: int):
     s = v.strip().lower().replace(" ", "")
     if s == "2l":
       return float(2 * n_layers)
-    if s in {"1/(2l)", "1/2l"}:
+    if s == "1/l":
+      return float(1.0 / float(n_layers))
+    if s == "1/(2l)":
       return 1.0 / float(2 * n_layers)
   return v
 
@@ -172,8 +174,11 @@ def main(_):
       )
       for layer in model.layers:
           for attr in collector_attrs:
-              getattr(layer, attr).track_variance = True
-
+              if cfg.track_sublayer_variance:
+                getattr(layer, attr).track_variance = True
+              if cfg.track_sublayer_kurtosis:
+                getattr(layer, attr).track_kurtosis = True
+  
     valid_loss = engine.eval(validloader)  # Run eval
 
     if cfg.track_softmax:  # Disable running average after eval
@@ -183,7 +188,10 @@ def main(_):
     if cfg.track_sublayer_variance:  # Disable running averages after eval
       for layer in model.layers:
           for attr in collector_attrs:
-              getattr(layer, attr).track_variance = False
+              if cfg.track_sublayer_variance:
+                getattr(layer, attr).track_variance = False
+              if cfg.track_sublayer_kurtosis:
+                getattr(layer, attr).track_kurtosis = False
 
   utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
             probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,

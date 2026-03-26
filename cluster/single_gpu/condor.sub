@@ -1,12 +1,11 @@
-
 # Executable should be a full path
 executable=/home/ltrochelmann/LN-variants/cluster/single_gpu/condor.sh
 
-# Hyperparmeters are specified in a YAML configuration file
-config=/home/ltrochelmann/LN-variants/config/exp_qknorm/TR_pre-norm_6L_res-scale_qknorm.yaml
+# Hyperparameters are specified in a YAML configuration file
+config=
 
 # Queue as many jobs as points in the hyperaparameter grid
-n_jobs=8
+n_jobs=
 
 # Pass arguments to the executable
 arguments = $(config) $(Process)
@@ -21,5 +20,6 @@ log = $(LOGS_DIR)/log/job.$(Cluster).$(Process).log
 request_memory = 250000
 request_cpus = 8
 request_gpus = 1
-requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Machine != "g147.internal.cluster.is.localnet") && (TARGET.Machine != "g132.internal.cluster.is.localnet")
+requirements = (TARGET.CUDADeviceName == "NVIDIA A100-SXM4-80GB") && (TARGET.Machine != "g147.internal.cluster.is.localnet") && (TARGET.Machine != "g132.internal.cluster.is.localnet") && (TARGET.Machine != "g174.internal.cluster.is.localnet")
+
 queue $(n_jobs)

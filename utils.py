@@ -371,7 +371,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     sublayer_variances = get_sublayer_variance(model, cfg)
 
   sublayer_kurtosis = None
-  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
+  if cfg.track_sublayer_kurtosis and valid_loss is not None:
     sublayer_kurtosis = get_sublayer_kurtosis(model)
 
   if not master_process:
