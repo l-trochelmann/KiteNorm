@@ -33,7 +33,7 @@ class ModelConfig:
     tie_embeddings: bool = False
     qknorm_L97: int = 2024
     compile: bool = True
-    track_var: bool = False
+    sublayer_tracking: bool = False
     embedding_norm: bool = False
 
 
@@ -203,8 +203,8 @@ class Block_NoNorm(nn.Module):
         self.skip_scale_first_layer = cfg.skip_scale_first_layer
         self.res_scale_first_layer = cfg.res_scale_first_layer
 
-        self.track_var = cfg.track_var
-        if self.track_var:
+        self.sublayer_tracking = cfg.sublayer_tracking
+        if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
             self.coll_attn_add = VarCollector()
@@ -231,7 +231,7 @@ class Block_NoNorm(nn.Module):
     def forward(self, x, freqs_cis):
         skip_scale, res_scale = self._scales()
 
-        if not self.track_var:
+        if not self.sublayer_tracking:
             x = self._mix(x, self.attn(x, freqs_cis), skip_scale, res_scale)
             x = self._mix(x, self.mlp(x),           skip_scale, res_scale)
             return x
@@ -267,8 +267,8 @@ class NormBlock(nn.Module):
         self.skip_scale = cfg.skip_scale
         self.res_scale = cfg.res_scale
 
-        self.track_var = cfg.track_var
-        if self.track_var:
+        self.sublayer_tracking = cfg.sublayer_tracking
+        if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
             self.coll_attn_add = VarCollector()
@@ -287,7 +287,7 @@ class NormBlock(nn.Module):
 class Block_PreNorm(NormBlock):
     def forward(self, x, freqs_cis):
         # x: (bsz, seqlen, dim)
-        if not self.track_var:
+        if not self.sublayer_tracking:
             x = self._mix(x, self.attn(self.attn_norm(x), freqs_cis))
             x = self._mix(x, self.mlp(self.mlp_norm(x)))
             return x
@@ -343,7 +343,7 @@ class Block_PostNorm(NormBlock):
     def forward(self, x, freqs_cis):
         skip_scale, res_scale = self._scales()
 
-        if not self.track_var:
+        if not self.sublayer_tracking:
             # attn sublayer
             x_add = self._mix2(x, self.attn(x, freqs_cis), skip_scale, res_scale)
             if self.attn_norm is None:
@@ -404,8 +404,8 @@ class Block_DoubleNorm(nn.Module):
         self.res_scale_first_layer = cfg.res_scale_first_layer 
         self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
 
-        self.track_var = cfg.track_var
-        if self.track_var:
+        self.sublayer_tracking = cfg.sublayer_tracking
+        if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
             self.coll_attn_add = VarCollector(is_before_norm=True)
@@ -434,7 +434,7 @@ class Block_DoubleNorm(nn.Module):
         skip_scale, res_scale = self._scales()
 
         # attn sublayer
-        if self.track_var:
+        if self.sublayer_tracking:
             x_in = x
             self.coll_attn_in.calc_var(x_in)
             x_out = self.attn(self.attn_norm_in(x_in), freqs_cis)
@@ -450,7 +450,7 @@ class Block_DoubleNorm(nn.Module):
             x = self.attn_norm_out(x_add)
 
         # mlp sublayer
-        if self.track_var:
+        if self.sublayer_tracking:
             x_in = x
             self.coll_mlp_in.calc_var(x_in)
             x_out = self.mlp(self.mlp_norm_in(x_in))

@@ -341,6 +341,52 @@ def get_sublayer_kurtosis(model):
     return hidden_kurtosis
 
 
+def get_token_alignment(model):
+    """
+    Like get_sublayer_variance, but to retrieve cosine alignemnt and non-mean portion.
+    Supports DDP by reducing sums and counts across ranks.
+    """
+    alignment_metrics = {}
+    model.eval()
+
+    ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+
+    collector_attrs = (
+        "coll_attn_add",
+        "coll_mlp_add",
+    )
+
+    for layer in model.layers:
+        lid = layer.layer_id
+    
+        for attr in collector_attrs:
+            coll = getattr(layer, attr, None)
+            if coll is None or not getattr(coll, "is_before_norm", False):
+                continue
+
+            cos_sum = coll.running_token_cos_alignment_sum.clone()
+            non_mean_sum = coll.running_token_non_mean_portion_sum.clone()
+            count = coll.running_count_3.clone()
+
+            if ddp:
+                torch.distributed.all_reduce(cos_sum, op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(non_mean_sum, op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(count, op=torch.distributed.ReduceOp.SUM)
+
+            cos_avg = (cos_sum / count).item() if count.item() > 0 else float("nan")
+            non_mean_avg = (non_mean_sum / count).item() if count.item() > 0 else float("nan")
+
+            name = attr.replace("coll_", "").replace("_", "-")
+            alignment_metrics[f"token_cos-alignment_{name}/{lid}"] = cos_avg
+            alignment_metrics[f"token_non-mean-portion_{name}/{lid}"] = non_mean_avg
+
+            coll.running_token_cos_alignment_sum.zero_()
+            coll.running_token_non_mean_portion_sum.zero_()
+            coll.running_count_3.zero_()
+
+    return alignment_metrics
+
+
 def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None, master_process=True):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: valid_loss is already reduced across GPUs in engine.eval()
@@ -373,6 +419,10 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   sublayer_kurtosis = None
   if cfg.track_sublayer_kurtosis and valid_loss is not None:
     sublayer_kurtosis = get_sublayer_kurtosis(model)
+
+  token_alignment = None
+  if cfg.track_token_alignment and valid_loss is not None:
+    token_alignment = get_token_alignment(model)
 
   if not master_process:
     return
@@ -421,6 +471,9 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
 
   if sublayer_kurtosis is not None:
     new_metrics.update(sublayer_kurtosis)
+
+  if token_alignment is not None:
+    new_metrics.update(token_alignment)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
