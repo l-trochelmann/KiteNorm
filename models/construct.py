@@ -31,9 +31,9 @@ def construct_model(cfg):
       ln_use_shift = cfg.ln_use_shift,
       qknorm_L97 = cfg.qknorm_L97,
       compile = cfg.torch_compile,
-      sublayer_tracking = cfg.track_sublayer_variance 
-        or cfg.track_token_alignment
-        or cfg.track_sublayer_kurtosis
+      sublayer_tracking = getattr(cfg, "track_sublayer_variance", False)
+        or getattr(cfg, "track_token_alignment", False)
+        or getattr(cfg, "track_sublayer_kurtosis", False)
         or bool(cfg.regulariser),  # For logging  or regulariser
       embedding_norm = getattr(cfg, "embedding_norm", False),
     )
