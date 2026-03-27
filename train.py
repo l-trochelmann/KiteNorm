@@ -89,7 +89,7 @@ def main(_):
     init_params = None
   else:
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
-  sublayer_tracking = cfg.track_sublayer_variance or cfg.track_sublayer_kurtosis or cfg.track_token_alignment
+  sublayer_tracking = getattr(cfg, "track_sublayer_variance", False) or getattr(cfg, "track_sublayer_kurtosis", False) or getattr(cfg, "track_token_alignment", False)
 
   # Training
   print_master("=== Start Training! ===")
@@ -99,7 +99,7 @@ def main(_):
   for micro_step, micro_batch in enumerate(trainloader, micro_step_start+1):
     step = micro_step // cfg.grad_accumulation_steps
     just_updated = (micro_step % cfg.grad_accumulation_steps == 0)
-    if step > cfg.steps_budget:
+    if step > cfg.steps_budget or step > 1000:
       break
 
     # Train
@@ -122,11 +122,11 @@ def main(_):
         )
         for layer in model.layers:
             for attr in collector_attrs:
-                if cfg.track_sublayer_variance:
+                if getattr(cfg, "track_sublayer_variance", False):
                   getattr(layer, attr).track_variance = True
-                if cfg.track_sublayer_kurtosis:
+                if getattr(cfg, "track_sublayer_kurtosis", False):
                   getattr(layer, attr).track_kurtosis = True
-                if cfg.track_token_alignment:
+                if getattr(cfg, "track_token_alignment", False):
                   getattr(layer, attr).track_alignment = True
 
       valid_loss = engine.eval(validloader)  # Run eval
@@ -138,11 +138,11 @@ def main(_):
       if sublayer_tracking:  # Disable running averages after eval
         for layer in model.layers:
             for attr in collector_attrs:
-                if cfg.track_sublayer_variance:
+                if getattr(cfg, "track_sublayer_variance", False):
                   getattr(layer, attr).track_variance = False
-                if cfg.track_sublayer_kurtosis:
+                if getattr(cfg, "track_sublayer_kurtosis", False):
                   getattr(layer, attr).track_kurtosis = False
-                if cfg.track_token_alignment:
+                if getattr(cfg, "track_token_alignment", False):
                   getattr(layer, attr).track_alignment = False
   
     # Log
@@ -179,11 +179,11 @@ def main(_):
       )
       for layer in model.layers:
           for attr in collector_attrs:
-              if cfg.track_sublayer_variance:
+              if getattr(cfg, "track_sublayer_variance", False):
                 getattr(layer, attr).track_variance = True
-              if cfg.track_sublayer_kurtosis:
+              if getattr(cfg, "track_sublayer_kurtosis", False):
                 getattr(layer, attr).track_kurtosis = True
-              if cfg.track_token_alignment:
+              if getattr(cfg, "track_token_alignment", False):
                 getattr(layer, attr).track_alignment = True
   
     valid_loss = engine.eval(validloader)  # Run eval
@@ -195,11 +195,11 @@ def main(_):
     if sublayer_tracking:  # Disable running averages after eval
       for layer in model.layers:
           for attr in collector_attrs:
-              if cfg.track_sublayer_variance:
+              if getattr(cfg, "track_sublayer_variance", False):
                 getattr(layer, attr).track_variance = False
-              if cfg.track_sublayer_kurtosis:
+              if getattr(cfg, "track_sublayer_kurtosis", False):
                 getattr(layer, attr).track_kurtosis = False
-              if cfg.track_token_alignment:
+              if getattr(cfg, "track_token_alignment", False):
                 getattr(layer, attr).track_alignment = False
 
   utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 

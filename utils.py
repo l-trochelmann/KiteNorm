@@ -413,15 +413,15 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
     softmax_entropies = get_softmax_entropy(model)
 
   sublayer_variances = None
-  if cfg.track_sublayer_variance and valid_loss is not None:
+  if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
     sublayer_variances = get_sublayer_variance(model, cfg)
 
   sublayer_kurtosis = None
-  if cfg.track_sublayer_kurtosis and valid_loss is not None:
+  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
     sublayer_kurtosis = get_sublayer_kurtosis(model)
 
   token_alignment = None
-  if cfg.track_token_alignment and valid_loss is not None:
+  if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
     token_alignment = get_token_alignment(model)
 
   if not master_process:
