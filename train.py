@@ -99,7 +99,7 @@ def main(_):
   for micro_step, micro_batch in enumerate(trainloader, micro_step_start+1):
     step = micro_step // cfg.grad_accumulation_steps
     just_updated = (micro_step % cfg.grad_accumulation_steps == 0)
-    if step > cfg.steps_budget or step > 1000:
+    if step > cfg.steps_budget:
       break
 
     # Train
