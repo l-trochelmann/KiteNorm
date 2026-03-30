@@ -70,9 +70,13 @@ def main(_):
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
   if cfg.regulariser:
+    is_var_regulariser = cfg.regulariser in {"var_L1", "var_ReLU"}
+    is_alignment_regulariser = cfg.regulariser == "alignment_ReLU"
     for m in model.modules():
-      if type(m).__name__ in {"VarCollector"}:
-        setattr(m, "regularise", True)
+      if type(m).__name__ == "VarCollector":
+        m.regularise_var = is_var_regulariser
+        m.regularise_alignment = is_alignment_regulariser
+        m.regularise = is_var_regulariser or is_alignment_regulariser
 
   # Initialise trackers:
   if not cfg.track_model_update:

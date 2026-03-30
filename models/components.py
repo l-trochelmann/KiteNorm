@@ -9,7 +9,10 @@ class VarCollector(nn.Module):
     def __init__(self, is_after_add=False):
         super().__init__()
         self.last_var = None
+        self.last_non_mean_portion = None
         self.regularise = False
+        self.regularise_var = False
+        self.regularise_alignment = False
         self.eps = 1.e-8
         self.is_after_add = is_after_add
 
@@ -30,10 +33,8 @@ class VarCollector(nn.Module):
     def calc_var(self, input):
         var = input.var(dim=-1, unbiased=False, keepdim=True)
 
-        if self.regularise and self.is_after_add:
+        if self.regularise_var and self.is_after_add:
             self.last_var = var
-        else:
-            self.last_var = var.detach()
 
         if self.track_variance:
             current_var = var.float().detach().mean().item()
@@ -57,13 +58,20 @@ class VarCollector(nn.Module):
             pair_mean = (token_sum.square().sum(dim=-1) - seqlen) / (seqlen * (seqlen - 1))
             self.running_token_cos_alignment_sum += pair_mean.mean().detach()
 
+        if self.track_alignment or self.regularise_alignment:
             x = input.float()
             x_centered = x - x.mean(dim=1, keepdim=True)
             non_mean_signal = x_centered.flatten(1).norm(p=2, dim=1)
             total_signal = x.flatten(1).norm(p=2, dim=1)
-            non_mean_portion = (non_mean_signal / total_signal.clamp_min(self.eps)).mean().detach()
-            self.running_token_non_mean_portion_sum += non_mean_portion
-            self.running_count_3 += 1
+            non_mean_portion = (non_mean_signal / total_signal.clamp_min(self.eps)).mean()
+            if self.regularise_alignment and self.is_after_add:
+                self.last_non_mean_portion = non_mean_portion
+            else:
+                self.last_non_mean_portion = non_mean_portion.detach()
+
+            if self.track_alignment:
+                self.running_token_non_mean_portion_sum += non_mean_portion.detach()
+                self.running_count_3 += 1
 
         return
 

@@ -122,18 +122,12 @@ class TorchEngine(torch.nn.Module):
           reg_model = reg_model.module
 
         reg_term = None
-        if self.regulariser == "mean_L1":
-          reg = regs.mean_L1(reg_model)
-        elif self.regulariser == "mean_L2":
-          reg = regs.mean_L2(reg_model)
-        elif self.regulariser == "mean_LogLin":
-          reg = regs.mean_LogLin(reg_model)
-        elif self.regulariser == "mean_LogSqr":
-          reg = regs.mean_LogSqr(reg_model)
-        elif self.regulariser == "mean_ReLU":
-          reg = regs.mean_ReLU(reg_model)
-        elif self.regulariser == "mean_SqrReLU":
-          reg = regs.mean_SqrReLU(reg_model)
+        if self.regulariser == "var_L1":
+          reg = regs.var_L1(reg_model)
+        elif self.regulariser == "var_ReLU":
+          reg = regs.var_ReLU(reg_model)
+        elif self.regulariser == "alignment_ReLU":
+          reg = regs.alignment_ReLU(reg_model)
         else:
           raise ValueError(f"Unknown regulariser: {self.regulariser}")
         reg_term = self.reg_strength * reg
@@ -146,12 +140,13 @@ class TorchEngine(torch.nn.Module):
     loss_val = loss.detach() * self.accumulation_steps
     if torch.isnan(loss_val):
       raise ValueError("Train loss is nan")
-    
+
     # clear var collectors
     if self.regulariser:
       for m in self.model.modules():
         if type(m).__name__ == "VarCollector":
           m.last_var = None
+          m.last_non_mean_portion = None
 
     # backward pass, with gradient scaling if training in fp16
     self.scaler.scale(loss).backward()
