@@ -358,10 +358,10 @@ def get_token_alignment(model):
 
     for layer in model.layers:
         lid = layer.layer_id
-    
+
         for attr in collector_attrs:
             coll = getattr(layer, attr, None)
-            if coll is None or not getattr(coll, "is_before_norm", False):
+            if coll is None or not getattr(coll, "is_after_add", False):
                 continue
 
             cos_sum = coll.running_token_cos_alignment_sum.clone()

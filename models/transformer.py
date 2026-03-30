@@ -207,10 +207,10 @@ class Block_NoNorm(nn.Module):
         if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
-            self.coll_attn_add = VarCollector()
+            self.coll_attn_add = VarCollector(is_after_add=True)
             self.coll_mlp_in   = VarCollector()
             self.coll_mlp_out  = VarCollector()
-            self.coll_mlp_add  = VarCollector()
+            self.coll_mlp_add  = VarCollector(is_after_add=True)
 
     def _scales(self):
         s_skip, s_res = self.skip_scale, self.res_scale
@@ -271,10 +271,10 @@ class NormBlock(nn.Module):
         if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
-            self.coll_attn_add = VarCollector()
+            self.coll_attn_add = VarCollector(is_after_add=True)
             self.coll_mlp_in   = VarCollector()
             self.coll_mlp_out  = VarCollector()
-            self.coll_mlp_add  = VarCollector()
+            self.coll_mlp_add  = VarCollector(is_after_add=True)
 
     def _mix(self, x_in, x_out):
         if self.skip_scale != -1:
@@ -317,9 +317,6 @@ class Block_PostNorm(NormBlock):
         self.skip_scale_first_layer = cfg.skip_scale_first_layer
         self.res_scale_first_layer = cfg.res_scale_first_layer
         self.omit_outer_norm_first_sublayer = cfg.omit_outer_norm_first_sublayer
-
-        self.coll_attn_add.is_before_norm = True
-        self.coll_mlp_add.is_before_norm = True
 
         if self.omit_outer_norm_first_sublayer and self.layer_id == 0:
             self.attn_norm = None
@@ -408,10 +405,10 @@ class Block_DoubleNorm(nn.Module):
         if self.sublayer_tracking:
             self.coll_attn_in  = VarCollector()
             self.coll_attn_out = VarCollector()
-            self.coll_attn_add = VarCollector(is_before_norm=True)
+            self.coll_attn_add = VarCollector(is_after_add=True)
             self.coll_mlp_in   = VarCollector()
             self.coll_mlp_out  = VarCollector()
-            self.coll_mlp_add  = VarCollector(is_before_norm=True)
+            self.coll_mlp_add  = VarCollector(is_after_add=True)
 
     def _scales(self):
         """Return (skip_scale, res_scale) after applying layer-0 overrides if configured."""

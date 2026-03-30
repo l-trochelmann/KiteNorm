@@ -6,12 +6,12 @@ from torch import nn
 
 class VarCollector(nn.Module):
     """Keeps track of input variance and optinally additional metrics. Returns nothing."""
-    def __init__(self, is_before_norm=False):
+    def __init__(self, is_after_add=False):
         super().__init__()
         self.last_var = None
         self.regularise = False
         self.eps = 1.e-8
-        self.is_before_norm = is_before_norm
+        self.is_after_add = is_after_add
 
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
@@ -30,7 +30,7 @@ class VarCollector(nn.Module):
     def calc_var(self, input):
         var = input.var(dim=-1, unbiased=False, keepdim=True)
 
-        if self.regularise and self.is_before_norm:
+        if self.regularise and self.is_after_add:
             self.last_var = var
         else:
             self.last_var = var.detach()
