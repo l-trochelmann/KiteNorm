@@ -66,9 +66,6 @@ class VarCollector(nn.Module):
             non_mean_portion = (non_mean_signal / total_signal.clamp_min(self.eps)).mean()
             if self.regularise_alignment and self.is_after_add:
                 self.last_non_mean_portion = non_mean_portion
-            else:
-                self.last_non_mean_portion = non_mean_portion.detach()
-
             if self.track_alignment:
                 self.running_token_non_mean_portion_sum += non_mean_portion.detach()
                 self.running_count_3 += 1
