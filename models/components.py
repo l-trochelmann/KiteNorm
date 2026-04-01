@@ -92,6 +92,26 @@ class LayerNorm(nn.Module):
             return y * self.weight + self.bias
 
 
+class ScalarLN(nn.Module):
+    """LayerNorm-parameters as scalars"""
+    def __init__(self, bias: bool = False):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(1))
+        self.bias = nn.Parameter(torch.zeros(1)) if bias else None
+        self.eps = 1e-6
+
+    def forward(self, input):
+        mean = input.mean(dim=-1, keepdim=True)
+        var = input.var(dim=-1, unbiased=False, keepdim=True) 
+    
+        y = (input - mean) * torch.rsqrt(var + self.eps)
+    
+        if self.bias is None:
+            return y * self.weight
+        else:
+            return y * self.weight + self.bias
+
+
 class LayerNorm_Simple(nn.Module):
     """Drops both LN parameters as suggested by Xu et al (2019)"""
     def __init__(self):
