@@ -6,6 +6,7 @@ from collections import defaultdict
 
 import utils
 import torch
+import math
 from utils import print_master
 from torch_utils import pytorch_setup, destroy_ddp
 from data import get_dataloaders
@@ -24,8 +25,10 @@ def _resolve_layer_scaled(v, n_layers: int):
     s = v.strip().lower().replace(" ", "")
     if s == "2l":
       return float(2 * n_layers)
+    if s == "1/sqrt(l)":
+      return 1 / math.sqrt(n_layers)
     if s == "1/l":
-      return float(1.0 / float(n_layers))
+      return float(1.0 / n_layers)
     if s == "1/(2l)":
       return 1.0 / float(2 * n_layers)
   return v
