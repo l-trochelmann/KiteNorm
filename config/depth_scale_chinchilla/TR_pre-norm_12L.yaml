@@ -14,32 +14,32 @@ num_workers: 4
 
 eval: True
 validset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_valid/validation"
-eval_every_steps: 32
+eval_every_steps: 64
 
 model: 'transformer'
 d_model: 512
 expand: '8/3'
-n_layers: 6
+n_layers: 12
 n_heads: 8
 mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale'
+weight_init: 'gpt2_res-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale'
 skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 omit_outer_norm_first_sublayer: False
 skip_scale_first_layer: -2           # -2 for no override. -1 to disable
 res_scale_first_layer: -2            # -2 for no override. -1 to disable
 
-ln_config: 'post-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'
-ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
+ln_config: 'pre-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'
+ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'ScalarLN', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm'
 ln_use_shift: True  # whether or not to use the LayerNorm bias parameter if applicable
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
 
 # note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
-steps_budget: 5340  # choose 70M*20=1.4B tokens by chinchilla scaling law -> Obtain step size as 1.4B/(2048*32*4) = 5340.576...
+steps_budget: 6866  # choose 90M*20=1.8B tokens by chinchilla scaling law -> Obtain step size as 1.8B/(2048*32*4) = 6866.4550...
 
 # note 1: this is micro batch size if grad_accumulation_steps>1
 # note 2: with ddp, effective batch size = batch_size * grad_accumulation_steps * ddp_world_size
@@ -52,9 +52,9 @@ dtype: 'bfloat16'
 
 optim: 'adamw'
 fused_optim: True
-regulariser: null  # Choose from 'mean_L1', 'mean_L2', 'mean_LogLin', 'mean_LogSqr', 'mean_ReLU', 'mean_SqrReLU' or null
+regulariser: null  # Choose from 'var_L1', 'var_ReLU', 'alignment_ReLU'  null
 regulariser_strength: 1.0
-lr: [5.e-4, 1.e-3, 2.e-3, 5.e-3, 1.e-2, 2.e-2]
+lr: [5.e-3, 1.e-2, 2.e-2]
 weight_decay: 0.1
 beta1: 0.95  # to tune, do tied grid search on 0.9, 0.95, 0.975
 beta2: 0.95
@@ -62,29 +62,30 @@ grad_clip: 1.0
 eps: 1.e-8
 
 scheduler: 'warmup_cosine'
-warmup_steps: 320
+warmup_steps: 0.06
 cooldown_steps: 0.15
 lr_start: 1.e-10
 lr_end: 0.0
 lr_end_pct: null
 
-log_every_steps: 16
+log_every_steps: 64
 print_progress: false
 
 use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_post-norm_6L_'
-exp_name: 'TR_post-norm_6L_'
+wandb_run_name: 'TR_pre-norm_12L_chinchilla'
+exp_name: 'TR_pre-norm_12L_chinchilla'
 check_existing_wandb_run: False
 track_model_update: False
-track_grad_norm: True
+track_grad_norm: False
 track_param_update: False
 track_softmax: False
-track_ln_weights: True
+track_ln_weights: False
 track_sublayer_variance: True
-track_sublayer_kurtosis: True
+track_sublayer_kurtosis: False
+track_token_alignment: False
 
 resume: False
 resume_step: null
