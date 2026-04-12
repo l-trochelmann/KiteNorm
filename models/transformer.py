@@ -29,7 +29,7 @@ class ModelConfig:
     skip_scale_first_layer: float = -2
     res_scale_first_layer: float = -2
     omit_outer_norm_first_sublayer: bool = False
-    rmsorm_eps: float = 1e-6
+    eps: float = 1e-6
     tie_embeddings: bool = False
     qknorm_L97: int = 2024
     compile: bool = True
@@ -49,17 +49,17 @@ def _get_ln_variant(cfg, dim=None):
         dim = cfg.dim
     style = cfg.ln_style.lower()
     if style == "layernorm":
-        return LayerNorm(dim, bias=cfg.ln_use_shift)
+        return LayerNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "layernorm_simple":
-        return LayerNorm_Simple()
+        return LayerNorm_Simple(eps=cfg.eps)
     elif style == "rmsnorm":
-        return RMSNorm(dim, cfg.rmsorm_eps)
+        return RMSNorm(dim, cfg.eps)
     elif style == "onlyaffine":
         return OnlyAffine(dim, bias=cfg.ln_use_shift)
     elif style == "detachnorm":
-        return DetachNorm(dim, bias=cfg.ln_use_shift)
+        return DetachNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "scalarln":
-        return ScalarLN(bias=cfg.ln_use_shift)
+        return ScalarLN(eps=cfg.eps, bias=cfg.ln_use_shift)
     else:
         raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'ScalarLN', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
 

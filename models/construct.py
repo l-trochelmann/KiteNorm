@@ -16,9 +16,9 @@ def construct_model(cfg):
       n_layers = cfg.n_layers,
       n_heads = cfg.n_heads,
       weight_init = cfg.weight_init,
-      skip_scale = cfg.skip_scale,
-      res_scale  = cfg.res_scale,
-      rmsorm_eps = 1e-6,
+      skip_scale = getattr(cfg, "skip_scale", -1),
+      res_scale  = getattr(cfg, "res_scale", -1),
+      eps = getattr(cfg, "eps", 1e-6),
       mlp = cfg.mlp_class,
       skip_scale_first_layer = getattr(cfg, "skip_scale_first_layer", -2),
       res_scale_first_layer = getattr(cfg, "res_scale_first_layer", -2),
@@ -27,14 +27,14 @@ def construct_model(cfg):
       tie_embeddings = cfg.tie_embeddings,
       ln_config = cfg.ln_config,
       ln_style = cfg.ln_style,
-      attn_style = cfg.attn_style,
-      ln_use_shift = cfg.ln_use_shift,
-      qknorm_L97 = cfg.qknorm_L97,
+      attn_style = getattr(cfg, "attn_style", 'Default'),
+      ln_use_shift = getattr(cfg, "ln_use_shift", True),
+      qknorm_L97 = getattr(cfg, "qknorm_L97", cfg.seq_len),
       compile = cfg.torch_compile,
       sublayer_tracking = getattr(cfg, "track_sublayer_variance", False)
         or getattr(cfg, "track_sublayer_kurtosis", False)
         or getattr(cfg, "track_token_alignment", False)
-        or bool(cfg.regulariser),  # For logging  or regulariser
+        or bool(getattr(cfg, "regulariser", None)),  # For logging  or regulariser
       embedding_norm = getattr(cfg, "embedding_norm", False),
     )
     model = Transformer(model_cfg)

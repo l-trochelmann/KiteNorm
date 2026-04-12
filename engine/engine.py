@@ -84,8 +84,8 @@ class TorchEngine(torch.nn.Module):
     param_groups = get_param_groups(model, cfg.weight_decay)
     self.optimizer = intialize_optimizer(param_groups, cfg)
     self.scheduler = initalize_scheduler(self.optimizer, cfg)
-    self.regulariser = cfg.regulariser
-    self.reg_strength = cfg.regulariser_strength
+    self.regulariser = getattr(cfg, "regulariser", None)
+    self.reg_strength = getattr(cfg, "regulariser_strength", 1.0)
 
     if cfg.resume:
       self.optimizer.load_state_dict(ckpt['optimizer'])

@@ -258,8 +258,8 @@ def get_sublayer_variance(model, cfg):
 
     ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
 
-    skip_scale = cfg.skip_scale
-    res_scale = cfg.res_scale
+    skip_scale = getattr(cfg, "skip_scale", -1)
+    res_scale = getattr(cfg, "res_scale", -1)
 
     collector_attrs = (
         "coll_attn_in", "coll_attn_out", "coll_attn_add",
@@ -393,6 +393,16 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
 
   ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
 
+  if not master_process:
+    return
+
+  new_metrics = {
+    "micro_step": micro_step,
+    "step": int(micro_step / cfg.grad_accumulation_steps),
+    "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
+    "lr": optimizer.param_groups[0].get("lr", float("NaN")),
+  }
+
   train_loss = None
   if isinstance(train_losses, list):
     train_loss = torch.stack(train_losses).mean()
@@ -408,72 +418,39 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
       torch.distributed.all_reduce(reg_term_log, op=torch.distributed.ReduceOp.SUM)
       reg_term_log = reg_term_log / world_size
 
-  softmax_entropies = None
-  if cfg.track_softmax and valid_loss is not None:
-    softmax_entropies = get_softmax_entropy(model)
+  new_metrics["train/reg_term"] = reg_term_log.item() if reg_term_log is not None else None
+  new_metrics["train/loss"] = train_loss
+  new_metrics["train/ppl"] = math.exp(train_loss) if train_loss < 709.78 else float("inf")
 
-  sublayer_variances = None
-  if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
-    sublayer_variances = get_sublayer_variance(model, cfg)
-
-  sublayer_kurtosis = None
-  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
-    sublayer_kurtosis = get_sublayer_kurtosis(model)
-
-  token_alignment = None
-  if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
-    token_alignment = get_token_alignment(model)
-
-  if not master_process:
-    return
-
-  new_metrics = {
-    "micro_step": micro_step,
-    "step": int(micro_step / cfg.grad_accumulation_steps),
-    "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
-    "lr": optimizer.param_groups[0].get("lr", float("NaN")),
-    "train/reg_term": reg_term_log.item() if reg_term_log is not None else None,
-    "train/loss": train_loss,
-    "train/ppl": math.exp(train_loss) if train_loss < 709.78 else float("inf"),
-  }
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
     new_metrics["valid/ppl"] = math.exp(valid_loss) if valid_loss < 709.78 else float("inf")
 
-  # Add gradient norms if requested
-  if cfg.track_grad_norm:
-    grad_norms = compute_grad_norms(model)
-    new_metrics.update(grad_norms)
+  if getattr(cfg, "track_grad_norm", False):
+    new_metrics.update(compute_grad_norms(model))
 
-  # Add model update metrics if requested
-  if cfg.track_model_update:
-    mu_l2 = compute_model_update_l2(model, init_logits, probe_inputs, ctx)
-    mu_cos = compute_model_update_cosine(model, init_logits, probe_inputs, ctx)
-    new_metrics.update(mu_l2)
-    new_metrics.update(mu_cos)
+  if getattr(cfg, "track_model_update", False):
+    new_metrics.update(compute_model_update_l2(model, init_logits, probe_inputs, ctx))
+    new_metrics.update(compute_model_update_cosine(model, init_logits, probe_inputs, ctx))
 
-  # Add param update metrics if requested
-  if cfg.track_param_update:
-    pu_l2 = compute_param_update_l2(model, init_params)
-    pu_cos = compute_param_update_cosine(model, init_params)
-    new_metrics.update(pu_l2)
-    new_metrics.update(pu_cos)
+  if getattr(cfg, "track_param_update", False):
+    new_metrics.update(compute_param_update_l2(model, init_params))
+    new_metrics.update(compute_param_update_cosine(model, init_params))
 
-  # Add LN weights metrics if requested
-  if cfg.track_ln_weights:
+  if getattr(cfg, "track_ln_weights", False):
     new_metrics.update(get_ln_param_stats(model))
 
-  if softmax_entropies is not None:
-    new_metrics.update(softmax_entropies)
+  if getattr(cfg, "track_softmax", False) and valid_loss is not None:
+    new_metrics.update(get_softmax_entropy(model))
 
-  if sublayer_variances is not None:
-    new_metrics.update(sublayer_variances)
+  if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
+    new_metrics.update(get_sublayer_variance(model, cfg))
 
-  if sublayer_kurtosis is not None:
-    new_metrics.update(sublayer_kurtosis)
+  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
+    new_metrics.update(get_sublayer_kurtosis(model))
 
-  if token_alignment is not None:
-    new_metrics.update(token_alignment)
+  if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
+    new_metrics.update(get_token_alignment(model))
 
   for k,v in new_metrics.items():
     metrics[k].append(v)

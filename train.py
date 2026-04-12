@@ -39,10 +39,12 @@ def main(_):
   CFG_PATH, JOB_IDX = FLAGS.config, FLAGS.job_idx
   cfg, _ = utils.load_config(CFG_PATH, JOB_IDX)
 
-  # (overcome .yaml limitation: automatic skip scale and res-scale)
+  # (overcome .yaml limitation: automated skip and residual branch scale)
+  skip_scale = getattr(cfg, "skip_scale", -1)
+  res_scale = getattr(cfg, "res_scale", -1)
   cfg = cfg._replace(
-    skip_scale=_resolve_layer_scaled(cfg.skip_scale, cfg.n_layers),
-    res_scale=_resolve_layer_scaled(cfg.res_scale, cfg.n_layers),
+    skip_scale=skip_scale if skip_scale == -1 else _resolve_layer_scaled(skip_scale, cfg.n_layers),
+    res_scale=res_scale if res_scale == -1 else _resolve_layer_scaled(res_scale, cfg.n_layers),
   )
   
   local_rank, world_size, device, master_process = pytorch_setup(cfg)
@@ -71,7 +73,7 @@ def main(_):
   
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
-  if cfg.regulariser:
+  if getattr(cfg, "regulariser", None):
     is_var_regulariser = cfg.regulariser in {"var_L1", "var_ReLU"}
     is_alignment_regulariser = cfg.regulariser == "alignment_ReLU"
     for m in model.modules():
@@ -80,8 +82,8 @@ def main(_):
         m.regularise_alignment = is_alignment_regulariser
         m.regularise = is_var_regulariser or is_alignment_regulariser
 
-  # Initialise trackers:
-  if not cfg.track_model_update:
+  # Initialise trackers
+  if not getattr(cfg, "track_model_update", False):
     probe_inputs = None
     init_logits = None
   else:
@@ -91,10 +93,12 @@ def main(_):
     with engine.ctx, torch.no_grad():
       init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs)).cpu()
     init_logits = init_logits.detach()
-  if not cfg.track_param_update:
+  
+  if not getattr(cfg, "track_param_update", False):
     init_params = None
   else:
     init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
+  
   sublayer_tracking = getattr(cfg, "track_sublayer_variance", False) or getattr(cfg, "track_sublayer_kurtosis", False) or getattr(cfg, "track_token_alignment", False)
 
   # Training
@@ -117,7 +121,7 @@ def main(_):
     if cfg.eval and ((just_updated and step % cfg.eval_every_steps == 0) or micro_step==1):
       print_master("Evaluating on validation set")
 
-      if cfg.track_softmax:  # Enable running average before eval
+      if getattr(cfg, "track_softmax", False):  # Enable running average before eval
         for layer in model.layers:
           layer.attn.track_entropy = True
 
@@ -137,7 +141,7 @@ def main(_):
 
       valid_loss = engine.eval(validloader)  # Run eval
 
-      if cfg.track_softmax:  # Disable running average after eval
+      if getattr(cfg, "track_softmax", False):  # Disable running average after eval
         for layer in model.layers:
           layer.attn.track_entropy = False
 
@@ -174,7 +178,7 @@ def main(_):
 
   if cfg.eval:
     print_master("Evaluating on validation set (final)")
-    if cfg.track_softmax:  # Enable running average before eval
+    if getattr(cfg, "track_softmax", False):  # Enable running average before eval
       for layer in model.layers:
         layer.attn.track_entropy = True
 
@@ -194,7 +198,7 @@ def main(_):
   
     valid_loss = engine.eval(validloader)  # Run eval
 
-    if cfg.track_softmax:  # Disable running average after eval
+    if getattr(cfg, "track_softmax", False):  # Disable running average after eval
       for layer in model.layers:
         layer.attn.track_entropy = False
 

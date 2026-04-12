@@ -74,11 +74,11 @@ class VarCollector(nn.Module):
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, dim: int, bias: bool = False):
+    def __init__(self, dim: int, eps: float = 1e-6, bias: bool = False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
-        self.eps = 1e-6
+        self.eps = eps
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
@@ -94,11 +94,11 @@ class LayerNorm(nn.Module):
 
 class ScalarLN(nn.Module):
     """LayerNorm-parameters as scalars"""
-    def __init__(self, bias: bool = False):
+    def __init__(self, eps: float = 1e-6, bias: bool = False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(1))
         self.bias = nn.Parameter(torch.zeros(1)) if bias else None
-        self.eps = 1e-6
+        self.eps = eps
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
@@ -114,9 +114,9 @@ class ScalarLN(nn.Module):
 
 class LayerNorm_Simple(nn.Module):
     """Drops both LN parameters as suggested by Xu et al (2019)"""
-    def __init__(self):
+    def __init__(self, eps: float = 1e-6):
         super().__init__()
-        self.eps = 1e-6
+        self.eps = eps
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
