@@ -1,5 +1,4 @@
-"""Pretrain a Transformer on language modeling.
-DDP currently not safe."""
+"""Pretrain a Transformer on language modeling."""
 
 from absl import app, flags
 from collections import defaultdict
