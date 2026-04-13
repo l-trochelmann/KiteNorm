@@ -36,6 +36,7 @@ def construct_model(cfg):
         or getattr(cfg, "track_token_alignment", False)
         or bool(getattr(cfg, "regulariser", None)),  # For logging  or regulariser
       embedding_norm = getattr(cfg, "embedding_norm", False),
+      mixNorm_ratio = getattr(cfg, "mixNorm_ratio", 0.25),
     )
     model = Transformer(model_cfg)
     

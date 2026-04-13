@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, ScalarLN, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm, VarCollector
+from .components import LayerNorm, LayerNorm_Simple, LayerNorm_Scaling, ScalarLN, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm, VarCollector
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -35,6 +35,7 @@ class ModelConfig:
     compile: bool = True
     sublayer_tracking: bool = False
     embedding_norm: bool = False
+    mixNorm_ratio: float = 0.25
 
 
 MLP_CLASSES = {
@@ -44,7 +45,7 @@ MLP_CLASSES = {
 }
 
 
-def _get_ln_variant(cfg, dim=None):
+def _get_ln_variant(cfg, dim=None, layer_idx=None):
     if dim is None:
         dim = cfg.dim
     style = cfg.ln_style.lower()
@@ -52,6 +53,8 @@ def _get_ln_variant(cfg, dim=None):
         return LayerNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "layernorm_simple":
         return LayerNorm_Simple(eps=cfg.eps)
+    elif style == "layernorm_scaling":
+        return LayerNorm_Scaling(dim, layer_idx=layer_idx, eps=cfg.eps, bias=cfg.ln_use_shift) if layer_idx != -1 else LayerNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "rmsnorm":
         return RMSNorm(dim, cfg.eps)
     elif style == "onlyaffine":
@@ -61,7 +64,7 @@ def _get_ln_variant(cfg, dim=None):
     elif style == "scalarln":
         return ScalarLN(eps=cfg.eps, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'ScalarLN', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'LayerNorm_Scaling', 'ScalarLN', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
 
 
 def _get_attn(cfg):
@@ -261,9 +264,9 @@ class NormBlock(nn.Module):
     def __init__(self, layer_id: int, cfg: ModelConfig):
         super().__init__()
         self.attn = _get_attn(cfg)
-        self.attn_norm = _get_ln_variant(cfg)
+        self.attn_norm = _get_ln_variant(cfg, layer_idx=layer_id)
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
-        self.mlp_norm = _get_ln_variant(cfg)
+        self.mlp_norm = _get_ln_variant(cfg, layer_idx=layer_id)
         self.layer_id = layer_id
 
         self.skip_scale = cfg.skip_scale
@@ -390,10 +393,10 @@ class Block_DoubleNorm(nn.Module):
         self.mlp = MLP_CLASSES[cfg.mlp](dim=cfg.dim, hidden_dim=int(cfg.expand * cfg.dim))
 
         # two norms per sublayer
-        self.attn_norm_in  = _get_ln_variant(cfg)
-        self.attn_norm_out = None if (cfg.omit_outer_norm_first_sublayer and layer_id == 0) else _get_ln_variant(cfg)
-        self.mlp_norm_in   = _get_ln_variant(cfg)
-        self.mlp_norm_out  = _get_ln_variant(cfg)
+        self.attn_norm_in  = _get_ln_variant(cfg, layer_idx=layer_id)
+        self.attn_norm_out = None if (cfg.omit_outer_norm_first_sublayer and layer_id == 0) else _get_ln_variant(cfg, layer_idx=layer_id)
+        self.mlp_norm_in   = _get_ln_variant(cfg, layer_idx=layer_id)
+        self.mlp_norm_out  = _get_ln_variant(cfg, layer_idx=layer_id)
 
         self.skip_scale = cfg.skip_scale
         self.res_scale = cfg.res_scale
@@ -463,6 +466,44 @@ class Block_DoubleNorm(nn.Module):
         return x
 
 
+class Block_PeriNorm(Block_DoubleNorm):
+    """Peri-LN aka Sandwich-LN as discussed in https://arxiv.org/pdf/2502.02732."""
+    def forward(self, x, freqs_cis):
+        skip_scale, res_scale = self._scales()
+
+        # attn sublayer
+        if self.sublayer_tracking:
+            x_in = x
+            self.coll_attn_in.calc_var(x_in)
+            x_out = self.attn(self.attn_norm_in(x_in), freqs_cis)
+            if self.attn_norm_out is not None:
+                x_out = self.attn_norm_out(x_out)
+            self.coll_attn_out.calc_var(x_out)
+            x = self._mix(x_in, x_out, skip_scale, res_scale)
+            self.coll_attn_add.calc_var(x)
+        else:
+            x_out = self.attn(self.attn_norm_in(x), freqs_cis)
+            if self.attn_norm_out is not None:
+                x_out = self.attn_norm_out(x_out)
+            x = self._mix(x, x_out, skip_scale, res_scale)
+
+        # mlp sublayer
+        if self.sublayer_tracking:
+            x_in = x
+            self.coll_mlp_in.calc_var(x_in)
+            x_out = self.mlp(self.mlp_norm_in(x_in))
+            x_out = self.mlp_norm_out(x_out)
+            self.coll_mlp_out.calc_var(x_out)
+            x = self._mix(x_in, x_out, skip_scale, res_scale)
+            self.coll_mlp_add.calc_var(x)
+        else:
+            x_out = self.mlp(self.mlp_norm_in(x))
+            x_out = self.mlp_norm_out(x_out)
+            x = self._mix(x, x_out, skip_scale, res_scale)
+
+        return x
+
+
 class Transformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -472,20 +513,27 @@ class Transformer(nn.Module):
         head_dim = cfg.dim // cfg.n_heads; assert cfg.dim % cfg.n_heads == 0
         
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.dim)
-        self.embed_norm = _get_ln_variant(cfg) if cfg.embedding_norm else None
+        self.embed_norm = _get_ln_variant(cfg, layer_idx=-1) if cfg.embedding_norm else None
         self.out_norm = None
         ln_config = cfg.ln_config.lower()
         if ln_config == 'pre-norm':
             self.layers = nn.ModuleList([Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
-            self.out_norm = _get_ln_variant(cfg)
+            self.out_norm = _get_ln_variant(cfg, layer_idx=-1)
         elif ln_config == 'post-norm':
             self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == "double-norm":
             self.layers = nn.ModuleList([Block_DoubleNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == "peri-norm":
+            self.layers = nn.ModuleList([Block_PeriNorm(idx, cfg) for idx in range(cfg.n_layers)])
         elif ln_config == 'no-norm':
             self.layers = nn.ModuleList([Block_NoNorm(idx, cfg) for idx in range(cfg.n_layers)])
+        elif ln_config == 'mix-norm':
+            self.layers = nn.ModuleList([Block_PostNorm(idx, cfg) if idx < math.floor(cfg.mixNorm_ratio * cfg.n_layers)
+                                         else Block_PreNorm(idx, cfg) for idx in range(cfg.n_layers)])
+            if cfg.mixNorm_ratio < 1.0:
+                self.out_norm = _get_ln_variant(cfg, layer_idx=-1)
         else:
-            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'")
+            raise ValueError("Invalid cfg.ln_config value. Choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm', 'peri-norm', 'mix-norm'")
         self.lm_head = nn.Linear(cfg.dim, cfg.vocab_size, bias=False)
         
         self.freqs_cis = precompute_freqs_cis(head_dim, cfg.seq_len, 500000)[0:cfg.seq_len]
@@ -510,28 +558,54 @@ class Transformer(nn.Module):
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
 
     def _init_weights(self, module):
-        if self.weight_init in ('gpt2_res-scale', 'gpt2_no-scale'):
+        if self.weight_init.lower() in ('gpt2_res-scale', 'gpt2_no-scale', 'mix-norm'):
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
                 if module.bias is not None:
                     torch.nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif self.weight_init.lower() == 'deepnet':
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_normal_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):  # DeepNet doesn't specify embedding initialisation, so we default to GPT-2 init
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         else:
-            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale'")
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'deepnet', 'mix-norm'")
 
     def _scale_residual_branches(self):
-        if self.weight_init in ('gpt2_res-scale'):
+        if self.weight_init.lower() == 'gpt2_res-scale':
             with torch.no_grad():
                 for n, p in self.named_parameters():
                     if n.endswith('fc2.weight'): # mlp/glu output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
                     if n.endswith('w_out.weight'): # attn output layer
                         p.mul_(1/math.sqrt(2 * self.n_layers))
-        elif self.weight_init in ('gpt2_no-scale'):
+        elif self.weight_init.lower() == 'gpt2_no-scale':
             return  # no residual scaling at initialisation
+        elif self.weight_init.lower() == 'DeepNorm':
+            with torch.no_grad():
+                beta = (8*self.n_layers)**(-1/4)
+                d = self.dim
+                for n, p in self.named_parameters():
+                    if n.endswith('fc1.weight') or n.endswith('fc2.weight') or n.endswith("w_out.weight"):
+                        p.mul_(beta)
+                    if n.endswith("w_qkv.weight"):
+                        p[2*d:3*d, :].mul_(beta)  # rescale only the value projection
+        elif self.weight_init.lower() == 'mix-norm':
+            with torch.no_grad():
+                n_pre_norm_layers = sum(isinstance(layer, Block_PreNorm) for layer in self.layers)
+                if n_pre_norm_layers == 0:
+                    return
+                scale = 1 / math.sqrt(2 * n_pre_norm_layers)
+                for layer in self.layers:
+                    if isinstance(layer, Block_PreNorm):
+                        layer.mlp.fc2.weight.mul_(scale)  # mlp/glu output layer
+                        layer.attn.w_out.weight.mul_(scale)  # attn output layer
         else:
-            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale'")
+            raise ValueError("Invalid cfg.weight_init value. Choose from 'gpt2_res-scale', 'gpt2_no-scale', 'mix-norm'")
 
     def tie_weights(self):
         self.lm_head.weight = self.embed_tokens.weight

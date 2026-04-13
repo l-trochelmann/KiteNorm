@@ -126,6 +126,26 @@ class LayerNorm_Simple(nn.Module):
         return y
 
 
+class LayerNorm_Scaling(nn.Module):
+    def __init__(self, dim: int, layer_idx: int, eps: float = 1e-6, bias: bool = False):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+        self.eps = eps
+        self.layer = layer_idx + 1
+
+    def forward(self, input):
+        mean = input.mean(dim=-1, keepdim=True)
+        var = input.var(dim=-1, unbiased=False, keepdim=True) 
+    
+        y = (input - mean) * torch.rsqrt(var + self.eps)
+    
+        if self.bias is None:
+            return (y * self.weight) * self.layer**(-0.5)
+        else:
+            return (y * self.weight + self.bias) * self.layer**(-0.5)
+
+
 class DetachNorm(nn.Module):
     """Detaches mean and variance as shown in experiments by Xu et al (2019)"""
     def __init__(self, dim: int, eps: float = 1e-6, bias: bool = False):
