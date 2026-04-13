@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
-from .components import LayerNorm, LayerNorm_Simple, LayerNorm_Scaling, ScalarLN, RMSNorm, MLP, GLU, MLPReluSquared, OnlyAffine, DetachNorm, VarCollector
+from .components import LayerNorm, LayerNorm_Simple, LayerNorm_Scaling, ScalarLN, RMSNorm, MLP, GLU, MLPReluSquared, VarCollector
 from .embeddings import precompute_freqs_cis, apply_rotary_emb_complex_like
 
 
@@ -57,14 +57,10 @@ def _get_ln_variant(cfg, dim=None, layer_idx=None):
         return LayerNorm_Scaling(dim, layer_idx=layer_idx, eps=cfg.eps, bias=cfg.ln_use_shift) if layer_idx != -1 else LayerNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "rmsnorm":
         return RMSNorm(dim, cfg.eps)
-    elif style == "onlyaffine":
-        return OnlyAffine(dim, bias=cfg.ln_use_shift)
-    elif style == "detachnorm":
-        return DetachNorm(dim, eps=cfg.eps, bias=cfg.ln_use_shift)
     elif style == "scalarln":
         return ScalarLN(eps=cfg.eps, bias=cfg.ln_use_shift)
     else:
-        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'LayerNorm_Scaling', 'ScalarLN', 'RMSNorm', 'OnlyAffine', 'DetachNorm'")
+        raise ValueError("Invalid cfg.ln_style value. Choose from 'LayerNorm', 'LayerNorm_Simple', 'LayerNorm_Scaling', 'ScalarLN', 'RMSNorm'")
 
 
 def _get_attn(cfg):

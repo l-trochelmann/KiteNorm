@@ -230,16 +230,9 @@ def get_ln_param_stats(model):
       elif "norm.bias" in name:
         ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
         ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
-      elif "norm.alpha" in name:
-        ln_param_stats[f"DyT_alpha_mean/{name}"] = param.data.mean().item()
-        ln_param_stats[f"DyT_alpha_std/{name}"] = param.data.std().item()
       elif "attn.g" in name:
         ln_param_stats[f"QKNorm_g_mean/{name}"] = param.data.mean().item()
         ln_param_stats[f"QKNorm_g_std/{name}"] = param.data.std().item()
-      elif "attn_resweight" in name:
-        ln_param_stats[f"ReZero_attn_resweight/{name}"] = param.item()
-      elif "mlp_resweight" in name:
-        ln_param_stats[f"ReZero_mlp_resweight/{name}"] = param.item()
 
   return ln_param_stats
 

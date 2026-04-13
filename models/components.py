@@ -146,44 +146,6 @@ class LayerNorm_Scaling(nn.Module):
             return (y * self.weight + self.bias) * self.layer**(-0.5)
 
 
-class DetachNorm(nn.Module):
-    """Detaches mean and variance as shown in experiments by Xu et al (2019)"""
-    def __init__(self, dim: int, eps: float = 1e-6, bias: bool = False):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.bias   = nn.Parameter(torch.zeros(dim)) if bias else None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        mean = x.mean(dim=-1, keepdim=True)
-        var  = x.var(dim=-1, unbiased=False, keepdim=True)
-
-        mean_detached = mean.detach()
-        std_detached  = (var + self.eps).sqrt().detach()
-
-        y = (x - mean_detached) / std_detached
-
-        if self.bias is None:
-            y = y * self.weight
-        else:
-            y = y * self.weight + self.bias
-        return y
-
-
-class OnlyAffine(nn.Module):
-    """Ablation: LN gain without normalisation"""
-    def __init__(self, dim: int, bias: bool = False):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
-
-    def forward(self, input):
-        output = input * self.weight
-        if self.bias is not None:
-            output = output + self.bias
-        return output
-
-
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
