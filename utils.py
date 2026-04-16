@@ -386,16 +386,6 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
 
   ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
 
-  if not master_process:
-    return
-
-  new_metrics = {
-    "micro_step": micro_step,
-    "step": int(micro_step / cfg.grad_accumulation_steps),
-    "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
-    "lr": optimizer.param_groups[0].get("lr", float("NaN")),
-  }
-
   train_loss = None
   if isinstance(train_losses, list):
     train_loss = torch.stack(train_losses).mean()
@@ -411,6 +401,31 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
       torch.distributed.all_reduce(reg_term_log, op=torch.distributed.ReduceOp.SUM)
       reg_term_log = reg_term_log / world_size
 
+  softmax_entropies = None
+  if getattr(cfg, "track_softmax", False) and valid_loss is not None:
+    softmax_entropies = get_softmax_entropy(model)
+
+  sublayer_variances = None
+  if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
+    sublayer_variances = get_sublayer_variance(model, cfg)
+
+  sublayer_kurtosis = None
+  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
+    sublayer_kurtosis = get_sublayer_kurtosis(model)
+
+  token_alignment = None
+  if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
+    token_alignment = get_token_alignment(model)
+
+  if not master_process:
+    return
+
+  new_metrics = {
+    "micro_step": micro_step,
+    "step": int(micro_step / cfg.grad_accumulation_steps),
+    "tokens": micro_step * cfg.micro_batch_size * cfg.seq_len * world_size,
+    "lr": optimizer.param_groups[0].get("lr", float("NaN")),
+  }
   new_metrics["train/reg_term"] = reg_term_log.item() if reg_term_log is not None else None
   new_metrics["train/loss"] = train_loss
   new_metrics["train/ppl"] = math.exp(train_loss) if train_loss < 709.78 else float("inf")
@@ -433,17 +448,17 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   if getattr(cfg, "track_ln_weights", False):
     new_metrics.update(get_ln_param_stats(model))
 
-  if getattr(cfg, "track_softmax", False) and valid_loss is not None:
-    new_metrics.update(get_softmax_entropy(model))
+  if softmax_entropies is not None:
+    new_metrics.update(softmax_entropies)
 
-  if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
-    new_metrics.update(get_sublayer_variance(model, cfg))
+  if sublayer_variances is not None:
+    new_metrics.update(sublayer_variances)
 
-  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
-    new_metrics.update(get_sublayer_kurtosis(model))
+  if sublayer_kurtosis is not None:
+    new_metrics.update(sublayer_kurtosis)
 
-  if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
-    new_metrics.update(get_token_alignment(model))
+  if token_alignment is not None:
+    new_metrics.update(token_alignment)
 
   for k,v in new_metrics.items():
     metrics[k].append(v)
