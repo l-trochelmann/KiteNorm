@@ -139,6 +139,18 @@ def _eval_valid_loss(
     return total_loss / num_batches
 
 
+def _is_ignorable_collector_key(key: str) -> bool:
+    return ".coll_" in key and (
+        key.endswith(".running_var_sum")
+        or key.endswith(".running_count_1")
+        or key.endswith(".running_kurtosis_sum")
+        or key.endswith(".running_count_2")
+        or key.endswith(".running_token_cos_alignment_sum")
+        or key.endswith(".running_token_non_mean_portion_sum")
+        or key.endswith(".running_count_3")
+    )
+
+
 def _load_model(cfg, checkpoint_path: str, device: str):
     with contextlib.redirect_stdout(io.StringIO()):
         model, _ = construct_model(cfg)
@@ -150,7 +162,16 @@ def _load_model(cfg, checkpoint_path: str, device: str):
     if "state_dict" not in checkpoint:
         raise ValueError("Checkpoint is missing `state_dict`.")
 
-    model.load_state_dict(checkpoint["state_dict"])
+    incompatible = model.load_state_dict(checkpoint["state_dict"], strict=False)
+    bad_missing = [k for k in incompatible.missing_keys if not _is_ignorable_collector_key(k)]
+    bad_unexpected = [k for k in incompatible.unexpected_keys if not _is_ignorable_collector_key(k)]
+    if bad_missing or bad_unexpected:
+        raise RuntimeError(
+            "Checkpoint is incompatible with model.\n"
+            f"Missing keys: {bad_missing}\n"
+            f"Unexpected keys: {bad_unexpected}"
+        )
+
     model.to(device)
     model.eval()
     return model
