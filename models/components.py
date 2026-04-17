@@ -127,23 +127,25 @@ class LayerNorm_Simple(nn.Module):
 
 
 class LayerNorm_Scaling(nn.Module):
-    def __init__(self, dim: int, layer_idx: int, eps: float = 1e-6, bias: bool = False):
+    def __init__(self, dim, layer_idx, eps=1e-6, bias=False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
         self.eps = eps
-        self.layer = layer_idx + 1
+        self.register_buffer("layer_scale", torch.tensor((layer_idx + 1) ** -0.5))
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
-        var = input.var(dim=-1, unbiased=False, keepdim=True) 
-    
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+
         y = (input - mean) * torch.rsqrt(var + self.eps)
-    
+
+        scale = self.layer_scale.to(dtype=y.dtype)
         if self.bias is None:
-            return (y * self.weight) * self.layer**(-0.5)
+            return (y * self.weight) * scale
         else:
-            return (y * self.weight + self.bias) * self.layer**(-0.5)
+            return (y * self.weight + self.bias) * scale
+
 
 
 class RMSNorm(torch.nn.Module):
