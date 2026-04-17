@@ -74,7 +74,7 @@ def main(_):
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
   if getattr(cfg, "regulariser", None):
-    is_var_regulariser = cfg.regulariser in {"var_L1", "var_ReLU"}
+    is_var_regulariser = cfg.regulariser in {"var_L1", "var_ReLU", "var_ReLU_MeanStd"}
     is_alignment_regulariser = cfg.regulariser == "alignment_ReLU"
     for m in model.modules():
       if type(m).__name__ == "VarCollector":

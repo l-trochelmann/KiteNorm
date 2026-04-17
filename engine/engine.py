@@ -126,6 +126,8 @@ class TorchEngine(torch.nn.Module):
           reg = regs.var_L1(reg_model)
         elif self.regulariser == "var_ReLU":
           reg = regs.var_ReLU(reg_model)
+        elif self.regulariser == "var_ReLU_MeanStd":
+          reg = regs.var_ReLU_MeanStd(reg_model)
         elif self.regulariser == "alignment_ReLU":
           reg = regs.alignment_ReLU(reg_model)
         else:
