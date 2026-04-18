@@ -581,7 +581,7 @@ class Transformer(nn.Module):
                         p.mul_(1/math.sqrt(2 * self.n_layers))
         elif self.weight_init.lower() == 'gpt2_no-scale':
             return  # no residual scaling at initialisation
-        elif self.weight_init.lower() == 'DeepNorm':
+        elif self.weight_init.lower() == 'deepnet':
             with torch.no_grad():
                 beta = (8*self.n_layers)**(-1/4)
                 d = self.dim
