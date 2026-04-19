@@ -1,0 +1,103 @@
+
+deterministic: False
+seed: 7
+
+cuda_matmul_allow_tf32: True
+cudnn_allow_tf32: True
+
+trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_15B_tokens/train"
+vocab_size: 50280  # taking 50280 from the other slim_pajama configs
+seq_len: 2048
+sampler: 'random'
+sampler_seed: 7
+num_workers: 4
+
+eval: True
+validset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_valid/validation"
+eval_every_steps: 128
+
+model: 'transformer'
+d_model: 512
+expand: '8/3'
+n_layers: 48
+n_heads: 8
+mlp_class: 'glu'
+tie_embeddings: False
+torch_compile: True
+
+weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale', 'deepnet', 'mix-norm'
+skip_scale: 96.0  # -1 for no rescaling. 1 retrieves standard contribution.
+res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
+omit_outer_norm_first_sublayer: True
+skip_scale_first_layer: -1           # -2 for no override. -1 to disable
+res_scale_first_layer: -2            # -2 for no override. -1 to disable
+
+ln_config: 'double-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm', 'peri-norm', 'mix-norm'
+ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'LayerNorm_Simple', 'LayerNorm_Scaling', 'ScalarLN', 'RMSNorm'
+attn_style: 'Default'  # choose from 'Default', 'QKNorm'
+ln_use_shift: False  # whether or not to use the LayerNorm bias parameter if applicable
+qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
+
+# note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
+steps_budget: 12207  # choose 160M*20=3.2B tokens by chinchilla scaling law -> Obtain step size as 3.2B/(2048*32*4) = 12207.0312...
+
+# note 1: this is micro batch size if grad_accumulation_steps>1
+# note 2: with ddp, effective batch size = batch_size * grad_accumulation_steps * ddp_world_size
+micro_batch_size: 16  # 64 is the GPU limit at 6 layers and 1024 seq_len! -> GPU limit at 6L-2048 is 32
+grad_accumulation_steps: 2  # target bs is 128, so we get 128/32 = 4 | Note that this was originally 8, so it was configured for much higher batch size: 64*8=512
+
+# note: choose between {float32, float16, bfloat16}
+# note: float16 data type will automatically use a GradScaler
+dtype: 'bfloat16'
+
+optim: 'adamw'
+fused_optim: True
+regulariser: null  # Choose from 'var_L1', 'var_ReLU', 'alignment_ReLU'  null
+regulariser_strength: 1.0
+lr: [2.e-3, 5.e-3, 1.e-2]
+weight_decay: 0.1
+beta1: 0.95  # to tune, do tied grid search on 0.9, 0.95, 0.975
+beta2: 0.95
+grad_clip: 1.0
+eps: 1.e-6
+
+scheduler: 'warmup_cosine'
+warmup_steps: 0.06
+cooldown_steps: 0.15
+lr_start: 1.e-10
+lr_end: 0.0
+lr_end_pct: null
+
+log_every_steps: 1
+print_progress: false
+
+use_wandb: True
+wandb_watch: False
+wandb_project: 'LN-variants'
+wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
+wandb_run_name: 'TR_KEEL_48L_glu'
+exp_name: 'TR_KEEL_48L_glu'
+check_existing_wandb_run: False
+track_model_update: False
+track_grad_norm: False
+track_param_update: False
+track_softmax: False
+track_ln_weights: False
+track_sublayer_variance: True
+track_sublayer_kurtosis: False
+track_token_alignment: False
+
+resume: False
+resume_step: null
+resume_exp_name: null
+
+out_dir: '/fast/ltrochelmann/exp/main'
+save_last_checkpoint: True
+save_intermediate_checkpoints: False
+save_every_steps: null
+
+save_optim: False
+save_scheduler: False
+save_scaler: False
+
+over_write: False
