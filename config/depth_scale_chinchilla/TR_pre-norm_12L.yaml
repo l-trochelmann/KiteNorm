@@ -68,7 +68,7 @@ lr_start: 1.e-10
 lr_end: 0.0
 lr_end_pct: null
 
-log_every_steps: 64
+log_every_steps: 1
 print_progress: false
 
 use_wandb: True
