@@ -4,7 +4,6 @@ import math
 import shutil
 import wandb
 import torch
-import re
 import torch.nn.functional as F
 
 from itertools import product
@@ -216,20 +215,26 @@ def get_softmax_entropy(model):
 
 
 def get_ln_param_stats(model):
-  """Computes mean and std of all normalisation-related affine parameters.
+  """Tracks normalisation-related affine parameters.
     
   Returns:
-      dict: A dictionary mapping parameter names to their mean and std.
+      dict: A dictionary mapping parameter names to scalar values or mean/std stats.
   """
   ln_param_stats = {}
   with torch.no_grad():
     for name, param in model.named_parameters():
       if "norm.weight" in name or "norm_in.weight" in name or "norm_out.weight" in name:
-        ln_param_stats[f"LN_gain_mean/{name}"] = param.data.mean().item()
-        ln_param_stats[f"LN_gain_std/{name}"] = param.data.std().item()
+        if param.numel() == 1:
+          ln_param_stats[f"LN_gain/{name}"] = param.data.item()
+        else:
+          ln_param_stats[f"LN_gain_mean/{name}"] = param.data.mean().item()
+          ln_param_stats[f"LN_gain_std/{name}"] = param.data.std().item()
       elif "norm.bias" in name:
-        ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
-        ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
+        if param.numel() == 1:
+          ln_param_stats[f"LN_bias/{name}"] = param.data.item()
+        else:
+          ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
+          ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
       elif "attn.g" in name:
         ln_param_stats[f"QKNorm_g_mean/{name}"] = param.data.mean().item()
         ln_param_stats[f"QKNorm_g_std/{name}"] = param.data.std().item()
