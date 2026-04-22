@@ -543,12 +543,13 @@ class Transformer(nn.Module):
 
     def forward(self, x):
         # x: (bsz, seqlen)
+        seqlen = x.size(1)
         x = self.embed_tokens(x)  # (bsz, seqlen, dim)
         if self.embed_norm is not None:
             x = self.embed_norm(x)
-        self.freqs_cis = self.freqs_cis.to(x.device)
+        freqs_cis = self.freqs_cis[:, :seqlen].to(x.device)
         for layer in self.layers:
-            x = layer(x, self.freqs_cis) # (bsz, seqlen, dim)
+            x = layer(x, freqs_cis) # (bsz, seqlen, dim)
         if self.out_norm is not None:
             x = self.out_norm(x)
         return self.lm_head(x) # (bsz, seqlen, vocab_size)
