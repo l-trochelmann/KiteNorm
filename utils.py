@@ -392,7 +392,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
 
   train_loss = None
-  if isinstance(train_losses, list):
+  if isinstance(train_losses, list) and train_losses:
     train_loss = torch.stack(train_losses).mean()
     if ddp:
       torch.distributed.all_reduce(train_loss, op=torch.distributed.ReduceOp.SUM)
@@ -433,11 +433,11 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   }
   new_metrics["train/reg_term"] = reg_term_log.item() if reg_term_log is not None else None
   new_metrics["train/loss"] = train_loss
-  new_metrics["train/ppl"] = math.exp(train_loss) if train_loss < 709.78 else float("inf")
+  new_metrics["train/ppl"] = math.exp(train_loss) if train_loss is not None and train_loss < 709.78 else float("inf")
 
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
-    new_metrics["valid/ppl"] = math.exp(valid_loss) if valid_loss < 709.78 else float("inf")
+    new_metrics["train/ppl"] = None if train_loss is None else math.exp(train_loss) if train_loss < 709.78 else float("inf")
 
   if getattr(cfg, "track_grad_norm", False):
     new_metrics.update(compute_grad_norms(model))
