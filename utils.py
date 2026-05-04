@@ -437,7 +437,7 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
 
   if valid_loss is not None:
     new_metrics["valid/loss"] = valid_loss
-    new_metrics["train/ppl"] = None if train_loss is None else math.exp(train_loss) if train_loss < 709.78 else float("inf")
+    new_metrics["valid/ppl"] = None if train_loss is None else math.exp(train_loss) if train_loss < 709.78 else float("inf")
 
   if getattr(cfg, "track_grad_norm", False):
     new_metrics.update(compute_grad_norms(model))
