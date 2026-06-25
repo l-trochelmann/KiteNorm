@@ -5,14 +5,14 @@ seed: 7
 cuda_matmul_allow_tf32: True
 cudnn_allow_tf32: True
 
-trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens/train"
+trainset_path: "/fast/ltrochelmann/data/lm/fineweb/fw_35B_tokens_ctx2048/train"
 vocab_size: 50280  # taking 50280 from the other slim_pajama configs
 seq_len: 2048
 sampler: 'random'
 sampler_seed: 7
 num_workers: 4
 
-eval: True
+eval: False
 validset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_valid/validation"
 eval_every_steps: 128
 
@@ -25,20 +25,20 @@ mlp_class: 'glu'
 tie_embeddings: False
 torch_compile: True
 
-weight_init: 'gpt2_no-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale'
-skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution. '2L' calculates 2*n_layers
-res_scale: '1/(2L)'  # -1 for no rescaling. 1 retrieves standard contribution. '1/(2L)' calculates 1/(2*n_layers)
+weight_init: 'gpt2_res-scale'  # choose from 'gpt2_res-scale', 'gpt2_no-scale'
+skip_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
+res_scale: -1  # -1 for no rescaling. 1 retrieves standard contribution.
 omit_outer_norm_first_sublayer: False
 skip_scale_first_layer: -2           # -2 for no override. -1 to disable
 res_scale_first_layer: -2            # -2 for no override. -1 to disable
 
-ln_config: 'double-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'
-ln_style: 'ScalarLN'  # choose from 'LayerNorm', 'ScalarLN', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
+ln_config: 'pre-norm'  # choose from 'no-norm', 'pre-norm', 'post-norm', 'double-norm'
+ln_style: 'LayerNorm'  # choose from 'LayerNorm', 'ScalarLN', 'LayerNorm_Simple', 'RMSNorm', 'OnlyAffine', 'DetachNorm'
 attn_style: 'Default'  # choose from 'Default', 'QKNorm'
 ln_use_shift: True  # whether or not to use the LayerNorm bias parameter if applicable
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
 
-# note: step budget=token_budget/(seq_len * micro_batch_size * grad_accumulation_steps)
+# note: # step budget = token_budget / (seq_len * micro_batch_size * grad_accumulation_steps * ddp_world_size)
 steps_budget: 9536  # choose 1B*20=20B tokens by chinchilla scaling law -> Obtain step size as 20B/(2048*32*8*4) = 9536.74316...
 
 # note 1: this is micro batch size if grad_accumulation_steps>1
@@ -52,7 +52,7 @@ dtype: 'bfloat16'
 
 optim: 'adamw'
 fused_optim: True
-regulariser: 'var_ReLU'  # Choose from 'var_L1', 'var_ReLU', 'alignment_ReLU'  null
+regulariser: null  # Choose from 'var_L1', 'var_ReLU', 'alignment_ReLU'  null
 regulariser_strength: 1.0
 lr: [2.e-3, 5.e-3]
 weight_decay: 0.1
@@ -63,7 +63,7 @@ eps: 1.e-6
 
 scheduler: 'wsd'
 warmup_steps: 0.06
-cooldown_steps: 0.15
+cooldown_steps: 0.0
 lr_start: 1.e-10
 lr_end: 0.0
 lr_end_pct: null
@@ -75,8 +75,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_1B-pythia_ours_scalarLN_chinchilla'
-exp_name: 'TR_1B-pythia_ours_scalarLN_chinchilla'
+wandb_run_name: 'TR_1B-pythia_pre-norm_chinchilla_fw'
+exp_name: 'TR_1B-pythia_pre-norm_chinchilla_fw'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: False

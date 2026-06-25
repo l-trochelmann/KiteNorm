@@ -5,14 +5,14 @@ seed: 7
 cuda_matmul_allow_tf32: True
 cudnn_allow_tf32: True
 
-trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens/train"
+trainset_path: "/fast/ltrochelmann/data/lm/fineweb/fw_35B_tokens_ctx2048/train"
 vocab_size: 50280  # taking 50280 from the other slim_pajama configs
 seq_len: 2048
 sampler: 'random'
 sampler_seed: 7
 num_workers: 4
 
-eval: True
+eval: False
 validset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_valid/validation"
 eval_every_steps: 128
 
@@ -75,8 +75,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_1B-pythia_ours_scalarLN_chinchilla'
-exp_name: 'TR_1B-pythia_ours_scalarLN_chinchilla'
+wandb_run_name: 'TR_1B-pythia_ours_scalarLN_chinchilla_fw'
+exp_name: 'TR_1B-pythia_ours_scalarLN_chinchilla_fw'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: False

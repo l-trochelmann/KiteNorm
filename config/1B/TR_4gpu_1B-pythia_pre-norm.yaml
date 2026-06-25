@@ -5,7 +5,7 @@ seed: 7
 cuda_matmul_allow_tf32: True
 cudnn_allow_tf32: True
 
-trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_15B_tokens/train"
+trainset_path: "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens/train"
 vocab_size: 50280  # taking 50280 from the other slim_pajama configs
 seq_len: 2048
 sampler: 'random'
@@ -39,7 +39,7 @@ ln_use_shift: True  # whether or not to use the LayerNorm bias parameter if appl
 qknorm_L97: 2048  # 97.5 percentile sequence length for QKNorm temperature init, or simply seq_len if fixed.
 
 # note: # step budget = token_budget / (seq_len * micro_batch_size * grad_accumulation_steps * ddp_world_size)
-steps_budget: 7325  # choose 1B*20=20B tokens by chinchilla scaling law -> Obtain step size as 20B/(2048*32*8*4) = 9536.74316...
+steps_budget: 9536  # choose 1B*20=20B tokens by chinchilla scaling law -> Obtain step size as 20B/(2048*32*8*4) = 9536.74316...
 
 # note 1: this is micro batch size if grad_accumulation_steps>1
 # note 2: with ddp, effective batch size = batch_size * grad_accumulation_steps * ddp_world_size
@@ -75,8 +75,8 @@ use_wandb: True
 wandb_watch: False
 wandb_project: 'LN-variants'
 wandb_dir: '/home/ltrochelmann/LN-variants/logs/wandb'
-wandb_run_name: 'TR_1B-pythia_pre-norm'
-exp_name: 'TR_1B-pythia_pre-norm'
+wandb_run_name: 'TR_1B-pythia_pre-norm_chinchilla'
+exp_name: 'TR_1B-pythia_pre-norm_chinchilla'
 check_existing_wandb_run: False
 track_model_update: False
 track_grad_norm: False
