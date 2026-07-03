@@ -63,7 +63,7 @@ eps: 1.e-6
 
 scheduler: 'wsd'
 warmup_steps: 0.06
-cooldown_steps: 0.15
+cooldown_steps: 0.0
 lr_start: 1.e-10
 lr_end: 0.0
 lr_end_pct: null
