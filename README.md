@@ -2,6 +2,8 @@
 
 This respository serves as a reference implementation based on PlainLM: https://github.com/Niccolo-Ajroldi/plainLM
 
+arXiv: (Coming soon)
+
 Instructions are repeated below.
 
 ## Installation
