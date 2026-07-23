@@ -12,6 +12,10 @@
 """
 
 import os
+import filelock
+
+filelock.FileLock = filelock.SoftFileLock
+os.environ["SOFT_FILELOCK"] = "1"
 
 from itertools import chain
 from functools import partial
@@ -26,7 +30,7 @@ from transformers import AutoTokenizer
 out_path = "/fast/ltrochelmann/data/lm/slim_pajama/new_valid"
 
 # HF dataset name
-dataset_name = "cerebras/SlimPajama-627B"
+dataset_name = "gmongaras/SlimPajama-627B_Reupload"
 split = 'validation'
 
 # nrows = 10_000_000 # ~ 10B tokens
@@ -54,8 +58,7 @@ print("Loading Dataset")
 raw_dataset = load_dataset(
   dataset_name,
   split = split,
-  streaming = True,
-  download_mode='force_redownload'
+  streaming = True
 )
 
 print("From IterableDataset to Dataset")

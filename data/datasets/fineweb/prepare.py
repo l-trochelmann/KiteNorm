@@ -11,14 +11,18 @@
 """
 
 # export HF_HOME=/is/cluster/fast/najroldi/tmp
-CACHE_DIR="~/tmp"
-
 import os
+import filelock
+
+filelock.FileLock = filelock.SoftFileLock
+os.environ["SOFT_FILELOCK"] = "1"
+CACHE_DIR = os.environ.get("HF_DATASETS_CACHE")
+
 from itertools import chain
 from functools import partial
 
 from datasets import load_dataset, Dataset
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 from timeit import default_timer as timer
 
 timer_start = timer()
@@ -27,13 +31,14 @@ timer_start = timer()
 # Config
 
 # Path wwhere to save dataset
-out_path = "/fast/najroldi/data/lm/fineweb/fw_20B_tokens_ctx1024"
+out_path = "/fast/ltrochelmann/data/lm/fineweb_new"
 
 # HF dataset name
 dataset_name = "HuggingFaceFW/fineweb"
 
 # nrows = 20_000_000  # ~13B tokens
-nrows = 31_000_000  # ~20B tokens
+nrows = 39_300_000  # ~25B tokens
+# nrows = 55_000_000  # ~35B tokens
 
 seq_len = 2048
 max_seq_length = seq_len+1
@@ -78,20 +83,17 @@ if shuffle_raw_data:
 
 print("Tokenize")
 
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-print(f"Length of tokenizer = {len(tokenizer)}")  # should be 50257 for GPT2
+tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
+print(f"Length of tokenizer = {len(tokenizer)}")
 
-def tokenize_function(examples):
-  eos_token = tokenizer.eos_token
-  add_eos = lambda seq: (eos_token + seq + eos_token) if seq else seq
+def tokenize_function(examples: dict[str, list[str]]) -> dict[str, list[int]]:
+  add_eos = lambda seq: (seq + tokenizer.eos_token) if seq else seq
   add_eos_batched = lambda seqs: [add_eos(seq) for seq in seqs]
-  tokenized_output = tokenizer(
-      add_eos_batched(examples["text"]),
-      add_special_tokens=False,
-      return_special_tokens_mask=False,
-      return_attention_mask=False
+  return tokenizer(
+        add_eos_batched(examples["text"]),
+        return_special_tokens_mask=False,
+        return_attention_mask=False
   )
-  return tokenized_output
 
 # Set an high maximum number of tokens that the tokenizer can handle 
 # in a single input sequencem to prevent truncation during tokenization.
@@ -100,7 +102,7 @@ tokenizer.model_max_length = 1e30
 # Tokenize
 tokenized_datasets = dataset.map(
   tokenize_function, 
-  remove_columns=['text'],
+  remove_columns=dataset.column_names,
   **map_setup
 )
 
@@ -156,7 +158,7 @@ lm_datasets.set_format("torch")
 # https://github.com/KellerJordan/modded-nanogpt/blob/master/data/fineweb.py
 # A document might be splitted across train and valid splits.
 
-N_valid = 1_000  # ~100M tokens when seq_len=1024
+N_valid = 1_000  # 1_000 * 2_049 ≈ 2.05M tokens
 valid_set = lm_datasets.select(range(N_valid))
 train_set = lm_datasets.select(range(N_valid, len(lm_datasets)))
 

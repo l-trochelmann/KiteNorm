@@ -16,6 +16,10 @@
 """
 
 import os
+import filelock
+
+filelock.FileLock = filelock.SoftFileLock
+os.environ["SOFT_FILELOCK"] = "1"
 
 from itertools import chain
 from functools import partial
@@ -23,18 +27,18 @@ from functools import partial
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer
 
-# --------------------------------------------------------------------
+# --------------------------------------------------------------------    
 # Config
 
 # Your path where to save dataset
-out_path = "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_15B_tokens"
+out_path = "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens"
 
 # HF dataset name
-dataset_name = "cerebras/SlimPajama-627B"
+dataset_name = "gmongaras/SlimPajama-627B_Reupload"
 split = 'train'
 
 # nrows = 3_000_000 # ~ 3B tokens
-nrows = 15_000_000 # ~ 15B tokens
+nrows = 35_000_000 # ~ 35B tokens
 # nrows = 10_000_000 # ~ 10B tokens
 # nrows = 1_000 # ~ 1M tokens
 
