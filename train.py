@@ -136,7 +136,7 @@ def main(_):
                   getattr(layer, attr).track_variance = True
                 if getattr(cfg, "track_sublayer_kurtosis", False):
                   getattr(layer, attr).track_kurtosis = True
-                if getattr(cfg, "track_token_alignment", False):
+                if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                   getattr(layer, attr).track_alignment = True
 
       valid_loss = engine.eval(validloader)  # Run eval
@@ -152,7 +152,7 @@ def main(_):
                   getattr(layer, attr).track_variance = False
                 if getattr(cfg, "track_sublayer_kurtosis", False):
                   getattr(layer, attr).track_kurtosis = False
-                if getattr(cfg, "track_token_alignment", False):
+                if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                   getattr(layer, attr).track_alignment = False
   
     # Log
@@ -215,13 +215,18 @@ def main(_):
   utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
             probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,
             master_process=master_process)
+
+  # Finish and save
+  if torch.distributed.is_available() and torch.distributed.is_initialized(): 
+    torch.distributed.barrier()
   if master_process and cfg.save_last_checkpoint:
     save_checkpoint(micro_step-1, model, engine, cfg, JOB_IDX)
 
   print_master(f"=== Terminating... ===")
 
   # DDP slaughtering
-  destroy_ddp()
+  if torch.distributed.is_available() and torch.distributed.is_initialized():
+    torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
