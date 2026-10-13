@@ -1,17 +1,13 @@
-"""Measure downstream task scores when pruning model layers.
+"""Evaluate a full checkpoint on downstream lm-eval tasks.
 
-Logs to WandB a TSV table with one row per model variant. The baseline model is
-reported with ``removed_layer_idx = -1``.
-
-Default tasks are small-model friendly lm-eval tasks:
-
-    piqa,arc_easy,winogrande
+Logs downstream scores to WandB as ordinary scalar metrics.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +17,6 @@ from transformers import AutoTokenizer
 
 import utils
 from layer_influence import (
-    _ablate_layer_literal,
     _autocast_context,
     _load_model,
     _prepare_cfg,
@@ -31,13 +26,7 @@ from layer_influence import (
 
 DEFAULT_TASKS = "piqa,arc_easy,winogrande"
 DEFAULT_HF_CACHE_DIR = "/fast/ltrochelmann/data/lm/lm-eval"
-DEFAULT_PRIMARY_METRICS = (
-    "piqa/acc",
-    "piqa/acc_norm",
-    "arc_easy/acc",
-    "arc_easy/acc_norm",
-    "winogrande/acc",
-)
+DEFAULT_TOKENIZER_PATH = "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens/tokenizer"
 
 
 def _log(message: str) -> None:
@@ -62,32 +51,13 @@ def _split_csv(value: str) -> list[str]:
 def _resolve_tokenizer_path(cfg, tokenizer_path: str | None) -> str:
     if tokenizer_path:
         return tokenizer_path
-
-    cfg_tokenizer_path = getattr(cfg, "tokenizer_path", None)
-    if cfg_tokenizer_path:
-        return cfg_tokenizer_path
-
-    trainset_path = getattr(cfg, "trainset_path", None)
-    if trainset_path:
-        candidate = Path(trainset_path).parent / "tokenizer"
-        if candidate.is_dir():
-            return str(candidate)
-
-    validset_path = getattr(cfg, "validset_path", None)
-    if validset_path:
-        candidate = Path(validset_path).parent / "tokenizer"
-        if candidate.is_dir():
-            return str(candidate)
-
-    if getattr(cfg, "vocab_size", None) == 50257:
-        return "gpt2"
-    return "EleutherAI/gpt-neox-20b"
+    return DEFAULT_TOKENIZER_PATH
 
 
 def _load_tokenizer(cfg, tokenizer_path: str | None):
     resolved = _resolve_tokenizer_path(cfg, tokenizer_path)
     _log(f"Loading tokenizer from: {resolved}")
-    tokenizer = AutoTokenizer.from_pretrained(resolved)
+    tokenizer = AutoTokenizer.from_pretrained(resolved, local_files_only=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer, resolved
@@ -115,10 +85,6 @@ def _configure_hf_cache(cache_dir: str | None) -> str | None:
     os.environ.setdefault("TRANSFORMERS_CACHE", str(transformers_cache))
 
     _log(f"Using HF cache root: {root}")
-    _log(f"Using HF datasets cache: {datasets_cache}")
-    _log(f"Using HF hub cache: {hub_cache}")
-    _log(f"Using HF modules cache: {modules_cache}")
-
     return str(root)
 
 
@@ -138,7 +104,7 @@ def _make_lm_eval_wrapper(
         from lm_eval.api.model import LM
     except ImportError as exc:
         raise ImportError(
-            "lm_eval is required for downstream layer influence evaluation. "
+            "lm_eval is required for downstream evaluation. "
             "Install the pinned package in your environment, e.g. lm-eval==0.4.8."
         ) from exc
 
@@ -186,7 +152,7 @@ def _make_lm_eval_wrapper(
         def _encode_pair(self, context: str, continuation: str):
             whole = self.tok_encode(context + continuation)
             context_enc = self.tok_encode(context)
-            continuation_enc = whole[len(context_enc) :]
+            continuation_enc = whole[len(context_enc):]
             if not continuation_enc:
                 continuation_enc = self.tok_encode(continuation)
                 whole = context_enc + continuation_enc
@@ -195,6 +161,7 @@ def _make_lm_eval_wrapper(
         def _prepare_request(self, context: str, continuation: str):
             context_enc, continuation_enc, whole = self._encode_pair(context, continuation)
             continuation_start = len(context_enc)
+
             if continuation_start == 0:
                 whole = [self.eot_token_id] + whole
                 continuation_start = 1
@@ -206,8 +173,9 @@ def _make_lm_eval_wrapper(
 
             score_start = max(continuation_start, 1)
             score_positions = list(range(score_start, len(whole)))
+
             if continuation_enc and len(score_positions) > len(continuation_enc):
-                score_positions = score_positions[-len(continuation_enc) :]
+                score_positions = score_positions[-len(continuation_enc):]
 
             return {
                 "input_ids": whole,
@@ -223,17 +191,19 @@ def _make_lm_eval_wrapper(
             results = []
 
             for start in range(0, len(prepared), self.batch_size):
-                batch = prepared[start : start + self.batch_size]
+                batch = prepared[start:start + self.batch_size]
                 batch_max_len = max(len(item["input_ids"]) for item in batch)
+
                 input_ids = torch.full(
                     (len(batch), batch_max_len),
                     self._pad_token_id,
                     dtype=torch.long,
                     device=self.device,
                 )
+
                 for row_idx, item in enumerate(batch):
                     ids = torch.tensor(item["input_ids"], dtype=torch.long, device=self.device)
-                    input_ids[row_idx, : ids.numel()] = ids
+                    input_ids[row_idx, :ids.numel()] = ids
 
                 with _autocast_context(device, dtype_name):
                     output = self.model(input_ids)
@@ -245,11 +215,13 @@ def _make_lm_eval_wrapper(
                     total = 0.0
                     greedy = True
                     ids = item["input_ids"]
+
                     for pos in item["score_positions"]:
                         token_id = ids[pos]
                         prev_logits = log_probs[row_idx, pos - 1]
                         total += prev_logits[token_id].item()
                         greedy = greedy and (int(torch.argmax(prev_logits).item()) == token_id)
+
                     results.append((total, greedy))
 
             return results
@@ -263,8 +235,7 @@ def _make_lm_eval_wrapper(
 
         def generate_until(self, requests):
             raise NotImplementedError(
-                "layer_influence_lm-eval.py currently targets loglikelihood "
-                "tasks only; use piqa, arc_easy, and winogrande."
+                "downstream_eval.py currently targets loglikelihood tasks only."
             )
 
     return NativeTransformerLM()
@@ -284,11 +255,12 @@ def _run_lm_eval(
         "Starting lm-eval: "
         f"tasks={','.join(tasks)}, limit={limit}, batch_size={batch_size}"
     )
+
     try:
         from lm_eval import evaluator
     except ImportError as exc:
         raise ImportError(
-            "lm_eval is required for downstream layer influence evaluation. "
+            "lm_eval is required for downstream evaluation. "
             "Install the pinned package in your environment, e.g. lm-eval==0.4.8."
         ) from exc
 
@@ -322,80 +294,27 @@ def _run_lm_eval(
 
 def _flatten_lm_eval_results(results: dict) -> dict[str, float]:
     flattened = {}
+
     for task_name, task_results in results.get("results", {}).items():
         for metric_key, value in task_results.items():
             if metric_key == "alias" or "_stderr" in metric_key:
                 continue
             if value is None or value == "N/A":
                 continue
+
             metric_name = metric_key.split(",")[0]
             flattened[f"{task_name}/{metric_name}"] = float(value)
+
     return flattened
 
 
-def _format_rows(rows: list[tuple[int, dict[str, float]]], columns: list[str]) -> str:
-    lines = ["removed_layer_idx\t" + "\t".join(columns)]
-    for removed_layer_idx, metrics in rows:
-        values = [f"{metrics[column]:.10f}" if column in metrics else "nan" for column in columns]
-        lines.append(f"{removed_layer_idx}\t" + "\t".join(values))
-    return "\n".join(lines) + "\n"
-
-
 def _wandb_run_name(cfg) -> str:
-    return f"LI_lm-eval_{cfg.wandb_run_name}_{cfg.lr}"
+    return f"DE_lm-eval_{cfg.wandb_run_name}_{cfg.lr}"
 
 
-def _artifact_name(run_name: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in run_name) + "_artifact"
-
-
-def _artifact_tsv_filename(cfg) -> str:
-    return f"{cfg.wandb_run_name}-{cfg.lr}.tsv"
-
-
-def _metric_columns(rows: list[tuple[int, dict[str, float]]]) -> list[str]:
-    observed = {key for _, metrics in rows for key in metrics}
-    columns = [key for key in DEFAULT_PRIMARY_METRICS if key in observed]
-    columns.extend(sorted(observed - set(columns)))
-    return columns
-
-
-def _evaluate_variant(
-    cfg,
-    checkpoint_path: Path,
-    tokenizer,
-    removed_layer_idx: int,
-    device: str,
-    tasks: list[str],
-    batch_size: int,
-    limit: int | float | None,
-) -> dict[str, float]:
-    label = "baseline" if removed_layer_idx < 0 else f"removed_layer_idx={removed_layer_idx}"
-    _log(f"Loading model variant: {label}")
-    model = _load_model(cfg, str(checkpoint_path), device)
-    if removed_layer_idx >= 0:
-        _log(f"Ablating layer {removed_layer_idx}")
-        _ablate_layer_literal(model, removed_layer_idx)
-
-    _log(f"Evaluating model variant: {label}")
-    results = _run_lm_eval(
-        model=model,
-        tokenizer=tokenizer,
-        tasks=tasks,
-        device=device,
-        dtype_name=cfg.dtype,
-        max_length=cfg.seq_len,
-        batch_size=batch_size,
-        limit=limit,
-    )
-    metrics = _flatten_lm_eval_results(results)
-    _log(f"Finished model variant: {label} -> {metrics}")
-
-    del model
-    if "cuda" in device:
-        torch.cuda.empty_cache()
-
-    return metrics
+def _checkpoint_micro_step(checkpoint_path: Path) -> int | None:
+    match = re.search(r"ckpt_micro_step_(\d+)\.pth", checkpoint_path.name)
+    return int(match.group(1)) if match else None
 
 
 def main() -> None:
@@ -407,32 +326,35 @@ def main() -> None:
     parser.add_argument("--max_eval_batches", type=int, default=None, help="Deprecated compatibility alias for --limit.")
     parser.add_argument("--tasks", default=DEFAULT_TASKS, help=f"Comma-separated lm-eval tasks. Default: {DEFAULT_TASKS}.")
     parser.add_argument("--batch_size", type=int, default=8, help="lm-eval request batch size.")
-    parser.add_argument("--limit", default=None, help="Optional lm-eval limit, either an integer count or a float fraction.")
+    parser.add_argument("--limit", default=None, help="Optional lm-eval limit, integer count or float fraction.")
     parser.add_argument("--tokenizer_path", default=None, help="Optional tokenizer path/name. Defaults to <trainset parent>/tokenizer when present.")
     parser.add_argument("--hf_cache_dir", default=DEFAULT_HF_CACHE_DIR, help="HF/lm-eval cache root for task and tokenizer downloads.")
     args = parser.parse_args()
 
+    checkpoint_path = Path(args.checkpoint_path)
+    config_path = checkpoint_path.parent / "config.yaml"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Expected config next to checkpoint: {config_path}")
+
+    cfg, _ = utils.load_config(str(config_path))
+    cfg = _prepare_cfg(cfg)
+
+    hf_cache_dir = _configure_hf_cache(args.hf_cache_dir)
+
     run = wandb.init(
         project=args.wandb_project,
         dir=args.wandb_dir,
+        name=_wandb_run_name(cfg),
+        config=cfg._asdict(),
     )
 
     try:
-        checkpoint_path = Path(args.checkpoint_path)
-        config_path = checkpoint_path.parent / "config.yaml"
-        if not config_path.is_file():
-            raise FileNotFoundError(f"Expected config next to checkpoint: {config_path}")
-
-        cfg, _ = utils.load_config(str(config_path))
-        cfg = _prepare_cfg(cfg)
-        hf_cache_dir = _configure_hf_cache(args.hf_cache_dir)
-        run.name = _wandb_run_name(cfg)
-        run.config.update(cfg._asdict())
         run.config.update(
             {
-                "lm_eval_tasks": args.tasks,
-                "lm_eval_limit": args.limit if args.limit is not None else args.max_eval_batches,
-                "lm_eval_batch_size": args.batch_size,
+                "downstream_eval_tasks": args.tasks,
+                "downstream_eval_limit": args.limit if args.limit is not None else args.max_eval_batches,
+                "downstream_eval_batch_size": args.batch_size,
+                "checkpoint_path": str(checkpoint_path),
                 "hf_cache_dir": hf_cache_dir,
             },
             allow_val_change=True,
@@ -448,57 +370,42 @@ def main() -> None:
             str(args.max_eval_batches) if args.max_eval_batches is not None else None
         )
         limit = _parse_limit(limit_arg)
+
         tokenizer, resolved_tokenizer = _load_tokenizer(cfg, args.tokenizer_path)
         run.config.update({"tokenizer_path_resolved": resolved_tokenizer}, allow_val_change=True)
 
-        _log(f"Loading baseline model once to determine layer count from: {checkpoint_path}")
-        baseline_model = _load_model(cfg, str(checkpoint_path), device)
-        n_layers = len(baseline_model.layers)
-        _log(f"Found {n_layers} layers; evaluating {n_layers + 1} model variants")
-        del baseline_model
-        if "cuda" in device:
-            torch.cuda.empty_cache()
+        _log(f"Loading model from: {checkpoint_path}")
+        model = _load_model(cfg, str(checkpoint_path), device)
+        model.eval()
 
-        rows = [
-            (
-                -1,
-                _evaluate_variant(
-                    cfg,
-                    checkpoint_path,
-                    tokenizer,
-                    -1,
-                    device,
-                    tasks,
-                    args.batch_size,
-                    limit,
-                ),
-            )
-        ]
+        results = _run_lm_eval(
+            model=model,
+            tokenizer=tokenizer,
+            tasks=tasks,
+            device=device,
+            dtype_name=cfg.dtype,
+            max_length=cfg.seq_len,
+            batch_size=args.batch_size,
+            limit=limit,
+        )
 
-        for layer_idx in range(n_layers):
-            rows.append(
-                (
-                    layer_idx,
-                    _evaluate_variant(
-                        cfg,
-                        checkpoint_path,
-                        tokenizer,
-                        layer_idx,
-                        device,
-                        tasks,
-                        args.batch_size,
-                        limit,
-                    ),
-                )
-            )
+        metrics = _flatten_lm_eval_results(results)
+        micro_step = _checkpoint_micro_step(checkpoint_path)
 
-        table = _format_rows(rows, _metric_columns(rows))
-        artifact = wandb.Artifact(_artifact_name(run.name), type="layer_influence")
-        with artifact.new_file(_artifact_tsv_filename(cfg), mode="w", encoding="utf-8") as f:
-            f.write(table)
-        run.log_artifact(artifact)
+        log_metrics = dict(metrics)
+        if micro_step is not None:
+            log_metrics["checkpoint/micro_step"] = micro_step
 
-        print(table, end="")
+        _log(f"Logging metrics to WandB: {log_metrics}")
+        wandb.log(log_metrics, step=micro_step)
+
+        for key, value in metrics.items():
+            run.summary[key] = value
+
+        print("Downstream evaluation results:")
+        for key in sorted(metrics):
+            print(f"{key}: {metrics[key]:.10f}")
+
     finally:
         wandb.finish()
 
