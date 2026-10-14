@@ -1,0 +1,112 @@
+# PATHS
+trainset_path: 'TODO'
+validset_path: 'TODO'
+
+wandb_project: 'TODO'
+wandb_dir: 'TODO'  # offline logs
+wandb_run_name: 'TODO'
+
+out_dir: 'TODO'
+exp_name: 'TODO'
+
+
+# EXPERIMENT SETTINGS: LN settings default to KiteNorm
+weight_init: 'gpt2_no-scale'   # choose from: 'gpt2_res-scale', 'gpt2_no-scale'
+skip_scale: -1                 # -1 disables skip scaling; '2L' becomes 2*n_layers
+res_scale: '1/(2L)'            # -1 disables residual scaling; '1/(2L)' becomes 1/(2*n_layers)
+
+ln_config: 'double-norm'       # choose from: 'pre-norm', 'post-norm', 'double-norm'
+ln_style: 'ScalarLN'           # choose from: 'LayerNorm', 'ScalarLN', 'RMSNorm', 'ScalarRMSNorm'
+regulariser: 'var_ReLU'        # choose from: 'var_ReLU', null
+
+omit_outer_norm_first_sublayer: False  # for KEEL
+skip_scale_first_layer: -2  # for KEEL
+
+d_model: 2048
+expand: '8/3'  # pythia: '8/3', llama: 4
+n_layers: 16
+n_heads: 8  # pythia: 8, llama: 32
+
+lr: [2.e-3, 5.e-3]
+scheduler: 'wsd'
+cooldown_steps: 0.0
+
+
+# COMPUTE-DEPENDENT
+steps_budget: 9536  # token_budget / (seq_len * micro_batch_size * grad_accumulation_steps * ddp_world_size)
+micro_batch_size: 32  # per-GPU batch size
+grad_accumulation_steps: 8  # effective batch = micro_batch_size * grad_accumulation_steps * ddp_world_size
+
+cuda_matmul_allow_tf32: True
+cudnn_allow_tf32: True
+num_workers: 4
+torch_compile: True
+fused_optim: True
+dtype: 'bfloat16'  # choose from: 'float32', 'float16', 'bfloat16'
+
+
+# LOGGING
+use_wandb: True
+wandb_watch: False
+check_existing_wandb_run: False
+
+save_last_checkpoint: True
+
+log_every_steps: 1
+print_progress: false
+
+eval: True
+eval_every_steps: 128
+
+track_model_update: False
+track_grad_norm: False
+track_param_update: False
+track_softmax: False
+track_ln_weights: False
+track_sublayer_variance: True
+track_sublayer_kurtosis: False
+track_token_alignment: False
+
+
+# OTHER HYPERPARAMETERS: ablated on, but secondary
+seed: 7
+sampler_seed: 7
+
+ln_use_shift: True
+mlp_class: 'glu'
+
+beta1: 0.95
+beta2: 0.95
+warmup_steps: 0.06
+
+
+# FIXED: shared across all released experiments
+model: 'transformer'
+deterministic: False
+sampler: 'random'
+vocab_size: 50280
+seq_len: 2048
+eps: 1.e-6
+
+over_write: False
+save_intermediate_checkpoints: False
+save_every_steps: null
+resume: False
+resume_step: null
+resume_exp_name: null
+save_optim: False
+save_scheduler: False
+save_scaler: False
+
+tie_embeddings: False
+res_scale_first_layer: -2
+attn_style: 'Default'
+qknorm_L97: 2048
+
+optim: 'adamw'
+weight_decay: 0.1
+grad_clip: 1.0
+lr_start: 1.e-10
+lr_end: 0.0
+lr_end_pct: null
+regulariser_strength: 1.0
