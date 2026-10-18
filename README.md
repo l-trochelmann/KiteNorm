@@ -25,10 +25,10 @@ If using HTCondor, also check every `.sh` and `.sub` file under `cluster/single_
 
 ## Data
 
-Edit dataset_name, out_path, nrows, and num_proc as needed in:
-- data/datasets/slim_pajama/prepare_train.py
-- data/datasets/slim_pajama/prepare_valid.py
-- data/datasets/fineweb/prepare.py
+Edit `dataset_name`, `out_path`, `nrows`, and `num_proc` as needed in:
+- `data/datasets/slim_pajama/prepare_train.py`
+- `data/datasets/slim_pajama/prepare_valid.py`
+- `data/datasets/fineweb/prepare.py`
 
 Keep `seq_len = 2048` to match the base configuration. Prepare either SlimPajama:
 
@@ -47,7 +47,7 @@ SlimPajama saves `train`, `validation`, and `tokenizer`. FineWeb saves `train`, 
 
 ## Configuration
 
-Edit config/TR_4xB200_KiteNorm.yaml and set:
+Edit `config/TR_4xB200_KiteNorm.yaml` and set:
 
 ```yaml
 trainset_path: '<training out_path>/train'
@@ -59,7 +59,7 @@ out_dir: '<checkpoint directory>'
 exp_name: '<experiment name>'
 ```
 
-The base configuration is a four-GPU run with learning rates [2e-3, 5e-3]. Select one with --job_idx=0 or --job_idx=1.
+The base configuration is a four-GPU run with learning rates `[2e-3, 5e-3]`. Select one with `--job_idx=0` or `--job_idx=1`.
 
 ## Training
 ```bash
