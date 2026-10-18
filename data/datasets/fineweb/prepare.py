@@ -31,7 +31,7 @@ timer_start = timer()
 # Config
 
 # Path wwhere to save dataset
-out_path = "/fast/ltrochelmann/data/lm/fineweb_new"
+out_path = "/path/to/fineweb"
 
 # HF dataset name
 dataset_name = "HuggingFaceFW/fineweb"

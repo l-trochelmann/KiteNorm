@@ -1,11 +1,11 @@
 #!/bin/bash
 
-export HOME=/home/ltrochelmann
-export TMPDIR=/fast/ltrochelmann/tmp
+export HOME=/path/to/home
+export TMPDIR=/path/to/tmp
 
 echo "Activating environment"
-source /home/ltrochelmann/miniforge3/etc/profile.d/conda.sh
-conda activate ln-variants
+source /path/to/env
+conda activate env-name
 
 # Job specific vars
 echo "Assigning job variables"
@@ -14,4 +14,4 @@ job_idx=$2 # CONDOR job arrays range from 0 to n-1
 
 # Execute python script
 echo "Executing job script"
-python /home/ltrochelmann/LN-variants/train.py --config=$config --job_idx=$job_idx
+python /path/to/train.py --config=$config --job_idx=$job_idx

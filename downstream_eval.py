@@ -6,6 +6,9 @@ Logs downstream scores to WandB as ordinary scalar metrics.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
+import math
 import os
 import re
 from pathlib import Path
@@ -16,17 +19,97 @@ import wandb
 from transformers import AutoTokenizer
 
 import utils
-from layer_influence import (
-    _autocast_context,
-    _load_model,
-    _prepare_cfg,
-    _select_device,
-)
+from models import construct_model
 
 
-DEFAULT_TASKS = "piqa,arc_easy,winogrande"
-DEFAULT_HF_CACHE_DIR = "/fast/ltrochelmann/data/lm/lm-eval"
-DEFAULT_TOKENIZER_PATH = "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens/tokenizer"
+DEFAULT_TASKS = "piqa,arc_easy"
+DEFAULT_HF_CACHE_DIR = "/path/to/lm-eval-cache"
+DEFAULT_TOKENIZER_PATH = "/path/to/slim_pajama/tokenizer"
+
+
+def _resolve_layer_scaled(v, n_layers: int):
+    if isinstance(v, str):
+        s = v.strip().lower().replace(" ", "")
+        if s == "2l":
+            return float(2 * n_layers)
+        if s == "1/sqrt(l)":
+            return 1 / math.sqrt(n_layers)
+        if s == "1/l":
+            return float(1.0 / n_layers)
+        if s == "1/(2l)":
+            return 1.0 / float(2 * n_layers)
+    return v
+
+
+def _prepare_cfg(cfg):
+    skip_scale = getattr(cfg, "skip_scale", -1)
+    res_scale = getattr(cfg, "res_scale", -1)
+    cfg = cfg._replace(
+        skip_scale=skip_scale if skip_scale == -1 else _resolve_layer_scaled(skip_scale, cfg.n_layers),
+        res_scale=res_scale if res_scale == -1 else _resolve_layer_scaled(res_scale, cfg.n_layers),
+    )
+    if hasattr(cfg, "torch_compile"):
+        cfg = cfg._replace(torch_compile=False)
+    return cfg
+
+
+def _select_device(device_arg: str) -> str:
+    if device_arg != "auto":
+        return device_arg
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _autocast_context(device: str, dtype_name: str):
+    if "cuda" not in device:
+        return contextlib.nullcontext()
+    ptdtype = {
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[dtype_name]
+    return torch.amp.autocast(device_type="cuda", dtype=ptdtype)
+
+
+def _is_ignorable_collector_key(key: str) -> bool:
+    return ".coll_" in key and (
+        key.endswith(".running_var_sum")
+        or key.endswith(".running_count_1")
+        or key.endswith(".running_kurtosis_sum")
+        or key.endswith(".running_count_2")
+        or key.endswith(".running_token_cos_alignment_sum")
+        or key.endswith(".running_token_non_mean_portion_sum")
+        or key.endswith(".running_count_3")
+    )
+
+
+def _load_model(cfg, checkpoint_path: str, device: str):
+    with contextlib.redirect_stdout(io.StringIO()):
+        model, _ = construct_model(cfg)
+
+    if not hasattr(model, "layers"):
+        raise ValueError("Model does not expose a `layers` attribute.")
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if "state_dict" not in checkpoint:
+        raise ValueError("Checkpoint is missing `state_dict`.")
+
+    incompatible = model.load_state_dict(checkpoint["state_dict"], strict=False)
+    bad_missing = [k for k in incompatible.missing_keys if not _is_ignorable_collector_key(k)]
+    bad_unexpected = [k for k in incompatible.unexpected_keys if not _is_ignorable_collector_key(k)]
+    if bad_missing or bad_unexpected:
+        raise RuntimeError(
+            "Checkpoint is incompatible with model.\n"
+            f"Missing keys: {bad_missing}\n"
+            f"Unexpected keys: {bad_unexpected}"
+        )
+
+    model.to(device)
+    model.eval()
+    return model
 
 
 def _log(message: str) -> None:

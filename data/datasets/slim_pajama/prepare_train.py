@@ -31,7 +31,7 @@ from transformers import AutoTokenizer
 # Config
 
 # Your path where to save dataset
-out_path = "/fast/ltrochelmann/data/lm/slim_pajama/new_sp_35B_tokens"
+out_path = "/path/to/slim_pajama"
 
 # HF dataset name
 dataset_name = "gmongaras/SlimPajama-627B_Reupload"

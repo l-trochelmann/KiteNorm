@@ -115,26 +115,18 @@ class TorchEngine(torch.nn.Module):
       loss = self.criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
 
       if self.regulariser:
+        if self.regulariser != "var_ReLU":
+          raise ValueError(f"Unknown regulariser: {self.regulariser}")
+
         reg_model = self.model
         if hasattr(reg_model, "_orig_mod"):
           reg_model = reg_model._orig_mod
         if isinstance(reg_model, DDP):
           reg_model = reg_model.module
 
-        reg_term = None
-        if self.regulariser == "var_L1":
-          reg = regs.var_L1(reg_model)
-        elif self.regulariser == "var_ReLU":
-          reg = regs.var_ReLU(reg_model)
-        elif self.regulariser == "var_ReLU_MeanStd":
-          reg = regs.var_ReLU_MeanStd(reg_model)
-        elif self.regulariser == "alignment_ReLU":
-          reg = regs.alignment_ReLU(reg_model)
-        else:
-          raise ValueError(f"Unknown regulariser: {self.regulariser}")
-        reg_term = self.reg_strength * reg
+        reg_term = self.reg_strength * regs.var_ReLU(reg_model)
         loss = loss + reg_term
-        self._reg_acc = self._reg_acc + reg_term.detach()        
+        self._reg_acc = self._reg_acc + reg_term.detach()
 
       loss = loss / self.accumulation_steps
 
@@ -148,7 +140,6 @@ class TorchEngine(torch.nn.Module):
       for m in self.model.modules():
         if type(m).__name__ == "VarCollector":
           m.last_var = None
-          m.last_non_mean_portion = None
 
     # backward pass, with gradient scaling if training in fp16
     self.scaler.scale(loss).backward()

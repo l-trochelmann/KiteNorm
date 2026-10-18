@@ -32,9 +32,6 @@ Thumbs.db
 wandb/
 *.wandb
 
-# Ignore CNN-related data and checkpoints
-non_transformer/checkpoint
-non_transformer/data
-
-# Ignore results
-results/
+# Ignore custom configs
+/config/*
+!/config/TR_4xB200_KiteNorm.yaml

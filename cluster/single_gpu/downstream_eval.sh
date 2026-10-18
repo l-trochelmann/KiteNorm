@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-export HOME=/home/ltrochelmann
-export TMPDIR=/fast/ltrochelmann/tmp
+export HOME=/path/to/home
+export TMPDIR=/path/to/tmp
 export HF_DATASETS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 
@@ -11,16 +11,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "Activating environment"
-source /home/ltrochelmann/miniforge3/etc/profile.d/conda.sh
-conda activate ln-variants
+source /path/to/env
+conda activate env-name
 
 echo "Assigning job variables"
 ckpt=${1:?missing checkpoint path}
 limit=${2:-none}
-tasks=${3:-piqa,arc_easy,winogrande}
+tasks=${3:-piqa,arc_easy}
 batch_size=${4:-8}
 device=${5:-auto}
-hf_cache_dir=${6:-/fast/ltrochelmann/data/lm/lm-eval}
+hf_cache_dir=${6:-/path/to/lm-eval-cache}
 
 job_scratch=${_CONDOR_SCRATCH_DIR:-/tmp}
 local_hf_cache="$job_scratch/lm-eval-cache"
@@ -50,7 +50,7 @@ fi
 echo "Executing downstream evaluation"
 python "$REPO_ROOT/downstream_eval.py" \
   --checkpoint_path="$ckpt" \
-  --wandb_project="LN-variants" \
+  --wandb_project="wandb-name" \
   --wandb_dir="$REPO_ROOT/logs/wandb" \
   --tasks="$tasks" \
   --batch_size="$batch_size" \

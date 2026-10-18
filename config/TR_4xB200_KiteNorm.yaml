@@ -11,12 +11,12 @@ exp_name: 'TODO'
 
 
 # EXPERIMENT SETTINGS: LN settings default to KiteNorm
-weight_init: 'gpt2_no-scale'   # choose from: 'gpt2_res-scale', 'gpt2_no-scale'
+weight_init: 'gpt2_no-scale'   # choose from: 'gpt2_res-scale', 'gpt2_no-scale', 'mix-norm', 'deepnet'
 skip_scale: -1                 # -1 disables skip scaling; '2L' becomes 2*n_layers
 res_scale: '1/(2L)'            # -1 disables residual scaling; '1/(2L)' becomes 1/(2*n_layers)
 
-ln_config: 'double-norm'       # choose from: 'pre-norm', 'post-norm', 'double-norm'
-ln_style: 'ScalarLN'           # choose from: 'LayerNorm', 'ScalarLN', 'RMSNorm', 'ScalarRMSNorm'
+ln_config: 'double-norm'       # choose from: 'pre-norm', 'post-norm', 'double-norm', 'peri-norm', 'mix-norm'
+ln_style: 'ScalarLN'           # choose from: 'LayerNorm', 'ScalarLN', 'RMSNorm', 'ScalarRMSNorm', 'LayerNorm_Scaling'
 regulariser: 'var_ReLU'        # choose from: 'var_ReLU', null
 
 omit_outer_norm_first_sublayer: False  # for KEEL
@@ -58,13 +58,9 @@ print_progress: false
 eval: True
 eval_every_steps: 128
 
-track_model_update: False
 track_grad_norm: False
-track_param_update: False
-track_softmax: False
 track_ln_weights: False
 track_sublayer_variance: True
-track_sublayer_kurtosis: False
 track_token_alignment: False
 
 
@@ -80,7 +76,7 @@ beta2: 0.95
 warmup_steps: 0.06
 
 
-# FIXED: shared across all released experiments
+# FIXED: shared across all released experiments; don't change
 model: 'transformer'
 deterministic: False
 sampler: 'random'
@@ -100,8 +96,7 @@ save_scaler: False
 
 tie_embeddings: False
 res_scale_first_layer: -2
-attn_style: 'Default'
-qknorm_L97: 2048
+mixNorm_ratio: 0.25
 
 optim: 'adamw'
 weight_decay: 0.1

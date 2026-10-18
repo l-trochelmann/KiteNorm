@@ -4,7 +4,6 @@ import math
 import shutil
 import wandb
 import torch
-import torch.nn.functional as F
 
 from itertools import product
 from collections import namedtuple
@@ -89,134 +88,9 @@ def compute_grad_norms(model):
   return grad_norms
 
 
-def compute_model_update_l2(model, init_logits, probe_inputs, ctx):
-  """Computes the model update according to the DeepNet paper.
-  The token outputs are flattened and directly subtracted.
-
-  Returns:
-      dict: A ditionary with one key that maps to ||F(x, theta) - F(x, theta_0)||_2
-  """
-  model.eval()
-  device = next(model.parameters()).device
-  init_logits_gpu  = init_logits.to(device, non_blocking=True)
-  probe_inputs_gpu = probe_inputs.to(device, non_blocking=True)
-
-  with ctx, torch.no_grad():
-    new_logits = getattr(model(probe_inputs_gpu), 'logits', model(probe_inputs_gpu))
-
-  update_norm = (new_logits - init_logits_gpu).flatten().norm(p=2).item()
-
-  del new_logits, init_logits_gpu, probe_inputs_gpu
-  torch.cuda.empty_cache()
-
-  return {"model_update/l2-cumulative": update_norm}
-
-
-def compute_model_update_cosine(model, init_logits, probe_inputs, ctx):
-  """Computes the model update inspired by the DeepNet paper, but uses cosine distance rather than l2 distance.
-  The cosine similarity is computed token-wise and we retrieve the mean.
-
-  Returns:
-      dict: A ditionary with one key that maps to 1 - cos_sim(F(x, theta), F(x, theta_0))
-  """
-  model.eval()
-  device = next(model.parameters()).device
-  init_logits_gpu  = init_logits.to(device, non_blocking=True)
-  probe_inputs_gpu = probe_inputs.to(device, non_blocking=True)
-
-  with ctx, torch.no_grad():
-    new_logits = getattr(model(probe_inputs_gpu), 'logits', model(probe_inputs_gpu))
-    a = init_logits_gpu.view(-1, init_logits_gpu.size(-1))  # Flatten to (B*L, D)
-    b = new_logits.view(-1, new_logits.size(-1))  # Flatten to (B*L, D)
-  cos_sim = F.cosine_similarity(a, b, dim=1).mean().item()
-  cos_dist = 1.0 - cos_sim
-
-  del new_logits, init_logits_gpu, probe_inputs_gpu
-  torch.cuda.empty_cache()
-
-  return {"model_update/cosine-cumulative": cos_dist}
-
-
-def compute_param_update_l2(model, init_params):
-  """Tracks parameter update size via l2 distance from initialisation
-    
-  Returns:
-      dict: A dictionary mapping layer names to their cumulative l2 parameter update
-  """
-  l2_updates = {}
-
-  device = next(model.parameters()).device
-  for name, tensor in init_params.items():
-    init_params[name] = tensor.to(device, non_blocking=True)
-
-  with torch.no_grad():
-    for name, param in model.named_parameters():
-      cur = param.detach()
-      diff_norm = (cur - init_params[name]).norm(p=2).item()
-      l2_updates[f"param_update_l2-cumulative/{name}"] = diff_norm
-  
-  for name, tensor in init_params.items():
-    init_params[name] = tensor.cpu()
-  torch.cuda.empty_cache()
-
-  return l2_updates
-
-
-def compute_param_update_cosine(model, init_params):
-  """Tracks parameter update size via cosine distance from initialisation
-    
-  Returns:
-      dict: A dictionary mapping layer names to their cumulative cosine parameter update
-  """
-  cos_updates = {}
-
-  device = next(model.parameters()).device
-  for name, tensor in init_params.items():
-    init_params[name] = tensor.to(device, non_blocking=True)
-
-  with torch.no_grad():
-    for name, param in model.named_parameters():
-      cur = param.detach()
-      a = init_params[name].flatten()
-      b = cur.flatten()
-      # F.cosine_similarity expects tensors with an explicit dim
-      cos_sim = F.cosine_similarity(a, b, dim=0).item()
-      cos_updates[f"param_update_cosine-cumulative/{name}"] = 1.0 - cos_sim
-  
-  for name, tensor in init_params.items():
-    init_params[name] = tensor.cpu()
-  torch.cuda.empty_cache()
-
-  return cos_updates
-
-
-def get_softmax_entropy(model):
-  """Retrieves mean entropy of the softmax activations over the validation set for each layer."""
-  softmax_entropies = {}
-  model.eval()
-
-  ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
-
-  for layer in model.layers:
-    entropy_sum = layer.attn.entropy_sum.clone()
-    entropy_count = layer.attn.entropy_count.clone()
-
-    if ddp:
-      torch.distributed.all_reduce(entropy_sum, op=torch.distributed.ReduceOp.SUM)
-      torch.distributed.all_reduce(entropy_count, op=torch.distributed.ReduceOp.SUM)
-
-    layer_softmax_entropy = entropy_sum / entropy_count
-    softmax_entropies[f"softmax_entropy/{layer.layer_id}"] = layer_softmax_entropy.item()
-
-    layer.attn.entropy_sum.zero_()  # Reset running average before the next val pass
-    layer.attn.entropy_count.zero_()  # Reset running average before the next val pass
-  
-  return softmax_entropies
-
-
 def get_ln_param_stats(model):
   """Tracks normalisation-related affine parameters.
-    
+
   Returns:
       dict: A dictionary mapping parameter names to scalar values or mean/std stats.
   """
@@ -235,9 +109,6 @@ def get_ln_param_stats(model):
         else:
           ln_param_stats[f"LN_bias_mean/{name}"] = param.data.mean().item()
           ln_param_stats[f"LN_bias_std/{name}"] = param.data.std().item()
-      elif "attn.g" in name:
-        ln_param_stats[f"QKNorm_g_mean/{name}"] = param.data.mean().item()
-        ln_param_stats[f"QKNorm_g_std/{name}"] = param.data.std().item()
 
   return ln_param_stats
 
@@ -299,46 +170,6 @@ def get_sublayer_variance(model, cfg):
     return hidden_variances
 
 
-def get_sublayer_kurtosis(model):
-    """
-    Like get_sublayer_variance, but to retrieve kurtosis.
-    Supports DDP by reducing sums and counts across ranks.
-    """
-    hidden_kurtosis = {}
-    model.eval()
-
-    ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
-
-    collector_attrs = (
-        "coll_attn_in", "coll_attn_out", "coll_attn_add",
-        "coll_mlp_in",  "coll_mlp_out",  "coll_mlp_add",
-    )
-
-    for layer in model.layers:
-        lid = layer.layer_id
-
-        # Fetch and log collected kurtosis
-        for attr in collector_attrs:
-            coll = getattr(layer, attr)
-
-            kurtosis_sum = coll.running_kurtosis_sum.clone()
-            count = coll.running_count_2.clone()
-
-            if ddp:
-                torch.distributed.all_reduce(kurtosis_sum, op=torch.distributed.ReduceOp.SUM)
-                torch.distributed.all_reduce(count, op=torch.distributed.ReduceOp.SUM)
-
-            avg = (kurtosis_sum / count).item() if count.item() > 0 else float("nan")
-
-            name = attr.replace("coll_", "").replace("_", "-")
-            hidden_kurtosis[f"hidden_kurtosis_{name}/{lid}"] = avg
-
-            coll.running_kurtosis_sum.zero_()
-            coll.running_count_2.zero_()
-
-    return hidden_kurtosis
-
-
 def get_token_alignment(model):
     """
     Like get_sublayer_variance, but to retrieve cosine alignemnt and non-mean portion.
@@ -385,7 +216,7 @@ def get_token_alignment(model):
     return alignment_metrics
 
 
-def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, init_logits=None, probe_inputs=None, ctx=None, init_params=None, reg_term=None, master_process=True):
+def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_size, model=None, reg_term=None, master_process=True):
   "Computes new metrics and appends them to metrics. Logs on wandb. Prints log."
   # NOTE: valid_loss is already reduced across GPUs in engine.eval()
 
@@ -406,17 +237,9 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
       torch.distributed.all_reduce(reg_term_log, op=torch.distributed.ReduceOp.SUM)
       reg_term_log = reg_term_log / world_size
 
-  softmax_entropies = None
-  if getattr(cfg, "track_softmax", False) and valid_loss is not None:
-    softmax_entropies = get_softmax_entropy(model)
-
   sublayer_variances = None
   if getattr(cfg, "track_sublayer_variance", False) and valid_loss is not None:
     sublayer_variances = get_sublayer_variance(model, cfg)
-
-  sublayer_kurtosis = None
-  if getattr(cfg, "track_sublayer_kurtosis", False) and valid_loss is not None:
-    sublayer_kurtosis = get_sublayer_kurtosis(model)
 
   token_alignment = None
   if getattr(cfg, "track_token_alignment", False) and valid_loss is not None:
@@ -442,25 +265,11 @@ def log(cfg, metrics, micro_step, train_losses, valid_loss, optimizer, world_siz
   if getattr(cfg, "track_grad_norm", False):
     new_metrics.update(compute_grad_norms(model))
 
-  if getattr(cfg, "track_model_update", False):
-    new_metrics.update(compute_model_update_l2(model, init_logits, probe_inputs, ctx))
-    new_metrics.update(compute_model_update_cosine(model, init_logits, probe_inputs, ctx))
-
-  if getattr(cfg, "track_param_update", False):
-    new_metrics.update(compute_param_update_l2(model, init_params))
-    new_metrics.update(compute_param_update_cosine(model, init_params))
-
   if getattr(cfg, "track_ln_weights", False):
     new_metrics.update(get_ln_param_stats(model))
 
-  if softmax_entropies is not None:
-    new_metrics.update(softmax_entropies)
-
   if sublayer_variances is not None:
     new_metrics.update(sublayer_variances)
-
-  if sublayer_kurtosis is not None:
-    new_metrics.update(sublayer_kurtosis)
 
   if token_alignment is not None:
     new_metrics.update(token_alignment)

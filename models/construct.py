@@ -27,15 +27,11 @@ def construct_model(cfg):
       tie_embeddings = cfg.tie_embeddings,
       ln_config = cfg.ln_config,
       ln_style = cfg.ln_style,
-      attn_style = getattr(cfg, "attn_style", 'Default'),
       ln_use_shift = getattr(cfg, "ln_use_shift", True),
-      qknorm_L97 = getattr(cfg, "qknorm_L97", cfg.seq_len),
       compile = cfg.torch_compile,
       sublayer_tracking = getattr(cfg, "track_sublayer_variance", False)
-        or getattr(cfg, "track_sublayer_kurtosis", False)
         or getattr(cfg, "track_token_alignment", False)
-        or bool(getattr(cfg, "regulariser", None)),  # For logging  or regulariser
-      embedding_norm = getattr(cfg, "embedding_norm", False),
+        or bool(getattr(cfg, "regulariser", None)),  # For logging or regulariser
       mixNorm_ratio = getattr(cfg, "mixNorm_ratio", 0.25),
     )
     model = Transformer(model_cfg)

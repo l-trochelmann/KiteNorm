@@ -1,11 +1,11 @@
 #!/bin/bash
 
-export HOME=/home/ltrochelmann
-export TMPDIR=/fast/ltrochelmann/tmp
+export HOME=/path/to/home
+export TMPDIR=/path/to/tmp
 
 echo "Activating environment"
-source /home/ltrochelmann/miniforge3/etc/profile.d/conda.sh
-conda activate ln-variants
+source /path/to/env
+conda activate env-name
 
 # Job specific vars
 echo "Assigning job variables"
@@ -17,4 +17,4 @@ echo "Executing job script"
 torchrun \
   --redirects 1:0,2:0,3:0 \
   --standalone --nnodes=1 --nproc_per_node=4 \
-  /home/ltrochelmann/LN-variants/train.py --config=$config --job_idx=$job_idx
+  /path/to/train.py --config=$config --job_idx=$job_idx

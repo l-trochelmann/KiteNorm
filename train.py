@@ -12,7 +12,6 @@ from data import get_dataloaders
 from checkpoint_utils import save_checkpoint, maybe_load_checkpoint
 from models import construct_model
 from engine import TorchEngine
-from engine.engine import _move_to_device
 
 flags.DEFINE_string('config', 'config/config.yaml', 'Path to config.yaml file.')
 flags.DEFINE_integer('job_idx', None, 'Job idx for job-array sweeps. From 0 to n-1.')
@@ -74,32 +73,11 @@ def main(_):
   # Engine
   engine = TorchEngine(model, cfg, device, local_rank, ckpt)
   if getattr(cfg, "regulariser", None):
-    is_var_regulariser = cfg.regulariser in {"var_L1", "var_ReLU", "var_ReLU_MeanStd"}
-    is_alignment_regulariser = cfg.regulariser == "alignment_ReLU"
     for m in model.modules():
       if type(m).__name__ == "VarCollector":
-        m.regularise_var = is_var_regulariser
-        m.regularise_alignment = is_alignment_regulariser
-        m.regularise = is_var_regulariser or is_alignment_regulariser
+        m.regularise_var = True
 
-  # Initialise trackers
-  if not getattr(cfg, "track_model_update", False):
-    probe_inputs = None
-    init_logits = None
-  else:
-    probe_batch = next(iter(trainloader))
-    probe_inputs, _ = _move_to_device(probe_batch, cfg.seq_len, device)
-    model.eval()
-    with engine.ctx, torch.no_grad():
-      init_logits = getattr(model(probe_inputs),'logits', model(probe_inputs)).cpu()
-    init_logits = init_logits.detach()
-  
-  if not getattr(cfg, "track_param_update", False):
-    init_params = None
-  else:
-    init_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
-  
-  sublayer_tracking = getattr(cfg, "track_sublayer_variance", False) or getattr(cfg, "track_sublayer_kurtosis", False) or getattr(cfg, "track_token_alignment", False)
+  sublayer_tracking = getattr(cfg, "track_sublayer_variance", False) or getattr(cfg, "track_token_alignment", False)
 
   # Training
   print_master("=== Start Training! ===")
@@ -121,10 +99,6 @@ def main(_):
     if cfg.eval and ((just_updated and step % cfg.eval_every_steps == 0) or micro_step==1):
       print_master("Evaluating on validation set")
 
-      if getattr(cfg, "track_softmax", False):  # Enable running average before eval
-        for layer in model.layers:
-          layer.attn.track_entropy = True
-
       if sublayer_tracking:  # Enable running averages before eval
         collector_attrs = (
             "coll_attn_in", "coll_attn_out", "coll_attn_add",
@@ -134,32 +108,23 @@ def main(_):
             for attr in collector_attrs:
                 if getattr(cfg, "track_sublayer_variance", False):
                   getattr(layer, attr).track_variance = True
-                if getattr(cfg, "track_sublayer_kurtosis", False):
-                  getattr(layer, attr).track_kurtosis = True
                 if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                   getattr(layer, attr).track_alignment = True
 
       valid_loss = engine.eval(validloader)  # Run eval
-
-      if getattr(cfg, "track_softmax", False):  # Disable running average after eval
-        for layer in model.layers:
-          layer.attn.track_entropy = False
 
       if sublayer_tracking:  # Disable running averages after eval
         for layer in model.layers:
             for attr in collector_attrs:
                 if getattr(cfg, "track_sublayer_variance", False):
                   getattr(layer, attr).track_variance = False
-                if getattr(cfg, "track_sublayer_kurtosis", False):
-                  getattr(layer, attr).track_kurtosis = False
                 if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                   getattr(layer, attr).track_alignment = False
   
     # Log
     if (just_updated and step % cfg.log_every_steps == 0) or micro_step==1:
-      utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-                probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,
-                master_process=master_process)
+      utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size,
+                model=model, reg_term=engine.reg_term, master_process=master_process)
       if micro_step != 1:
         train_losses = []
 
@@ -178,9 +143,6 @@ def main(_):
 
   if cfg.eval:
     print_master("Evaluating on validation set (final)")
-    if getattr(cfg, "track_softmax", False):  # Enable running average before eval
-      for layer in model.layers:
-        layer.attn.track_entropy = True
 
     if sublayer_tracking:  # Enable running averages before eval
       collector_attrs = (
@@ -191,30 +153,21 @@ def main(_):
           for attr in collector_attrs:
               if getattr(cfg, "track_sublayer_variance", False):
                 getattr(layer, attr).track_variance = True
-              if getattr(cfg, "track_sublayer_kurtosis", False):
-                getattr(layer, attr).track_kurtosis = True
-              if getattr(cfg, "track_token_alignment", False):
+              if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                 getattr(layer, attr).track_alignment = True
-  
-    valid_loss = engine.eval(validloader)  # Run eval
 
-    if getattr(cfg, "track_softmax", False):  # Disable running average after eval
-      for layer in model.layers:
-        layer.attn.track_entropy = False
+    valid_loss = engine.eval(validloader)  # Run eval
 
     if sublayer_tracking:  # Disable running averages after eval
       for layer in model.layers:
           for attr in collector_attrs:
               if getattr(cfg, "track_sublayer_variance", False):
                 getattr(layer, attr).track_variance = False
-              if getattr(cfg, "track_sublayer_kurtosis", False):
-                getattr(layer, attr).track_kurtosis = False
-              if getattr(cfg, "track_token_alignment", False):
+              if getattr(cfg, "track_token_alignment", False) and attr in ("coll_attn_add", "coll_mlp_add"):
                 getattr(layer, attr).track_alignment = False
 
-  utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size, model=model, init_logits=init_logits, 
-            probe_inputs=probe_inputs, ctx=engine.ctx, init_params=init_params, reg_term=engine.reg_term,
-            master_process=master_process)
+  utils.log(cfg, metrics, micro_step, train_losses, valid_loss, engine.optimizer, world_size,
+            model=model, reg_term=engine.reg_term, master_process=master_process)
 
   # Finish and save
   if torch.distributed.is_available() and torch.distributed.is_initialized(): 

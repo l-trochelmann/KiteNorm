@@ -9,20 +9,13 @@ class VarCollector(nn.Module):
     def __init__(self, is_after_add=False):
         super().__init__()
         self.last_var = None
-        self.last_non_mean_portion = None
-        self.regularise = False
         self.regularise_var = False
-        self.regularise_alignment = False
         self.eps = 1.e-8
         self.is_after_add = is_after_add
 
         self.track_variance = False  # While True, keeps a running average over the input variance
         self.register_buffer("running_var_sum", torch.zeros(1))
         self.register_buffer("running_count_1", torch.zeros(1))
-
-        self.track_kurtosis = False  # While True, keeps a running average over the input kurtosis
-        self.register_buffer("running_kurtosis_sum", torch.zeros(1))
-        self.register_buffer("running_count_2", torch.zeros(1))
 
         self.track_alignment = False  # While True, keeps running averages over token alignment metrics
         self.register_buffer("running_token_cos_alignment_sum", torch.zeros(1))
@@ -41,16 +34,6 @@ class VarCollector(nn.Module):
             self.running_var_sum += current_var
             self.running_count_1 += 1
 
-        if self.track_kurtosis:
-            x = input.float()
-            mean = x.mean(dim=-1, keepdim=True)
-            y = (x - mean) * torch.rsqrt(var.float() + self.eps)
-            kurtosis = y.pow(4).mean(dim=-1, keepdim=True)
-
-            current_kurtosis = kurtosis.float().detach().mean().item()
-            self.running_kurtosis_sum += current_kurtosis
-            self.running_count_2 += 1
-
         if self.track_alignment:
             seqlen = input.size(1)
             x = F.normalize(input.float(), dim=-1)
@@ -58,17 +41,13 @@ class VarCollector(nn.Module):
             pair_mean = (token_sum.square().sum(dim=-1) - seqlen) / (seqlen * (seqlen - 1))
             self.running_token_cos_alignment_sum += pair_mean.mean().detach()
 
-        if self.track_alignment or self.regularise_alignment:
             x = input.float()
             x_centered = x - x.mean(dim=1, keepdim=True)
             non_mean_signal = x_centered.flatten(1).norm(p=2, dim=1)
             total_signal = x.flatten(1).norm(p=2, dim=1)
             non_mean_portion = (non_mean_signal / total_signal.clamp_min(self.eps)).mean()
-            if self.regularise_alignment and self.is_after_add:
-                self.last_non_mean_portion = non_mean_portion
-            if self.track_alignment:
-                self.running_token_non_mean_portion_sum += non_mean_portion.detach()
-                self.running_count_3 += 1
+            self.running_token_non_mean_portion_sum += non_mean_portion.detach()
+            self.running_count_3 += 1
 
         return
 
@@ -82,10 +61,10 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
-        var = input.var(dim=-1, unbiased=False, keepdim=True) 
-    
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+
         y = (input - mean) * torch.rsqrt(var + self.eps)
-    
+
         if self.bias is None:
             return y * self.weight
         else:
@@ -102,28 +81,14 @@ class ScalarLN(nn.Module):
 
     def forward(self, input):
         mean = input.mean(dim=-1, keepdim=True)
-        var = input.var(dim=-1, unbiased=False, keepdim=True) 
-    
+        var = input.var(dim=-1, unbiased=False, keepdim=True)
+
         y = (input - mean) * torch.rsqrt(var + self.eps)
-    
+
         if self.bias is None:
             return y * self.weight
         else:
             return y * self.weight + self.bias
-
-
-class LayerNorm_Simple(nn.Module):
-    """Drops both LN parameters as suggested by Xu et al (2019)"""
-    def __init__(self, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-
-    def forward(self, input):
-        mean = input.mean(dim=-1, keepdim=True)
-        var = input.var(dim=-1, unbiased=False, keepdim=True)
-
-        y = (input - mean) * torch.rsqrt(var + self.eps)  # No affine
-        return y
 
 
 class LayerNorm_Scaling(nn.Module):
