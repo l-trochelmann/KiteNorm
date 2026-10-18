@@ -147,7 +147,6 @@ class LayerNorm_Scaling(nn.Module):
             return (y * self.weight + self.bias) * scale
 
 
-
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -160,6 +159,22 @@ class RMSNorm(torch.nn.Module):
     def forward(self, x):
         # x: (bsz, T, dim)
         output = self._norm(x.float()).type_as(x) # (bsz, T, dim)
+        return output * self.weight
+
+
+class ScalarRMSNorm(nn.Module):
+    """RMSNorm parameter as a scalar"""
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(1))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        # x: (bsz, T, dim)
+        output = self._norm(x.float()).type_as(x)  # (bsz, T, dim)
         return output * self.weight
 
 
