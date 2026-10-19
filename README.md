@@ -45,6 +45,11 @@ python data/datasets/fineweb/prepare.py
 
 SlimPajama saves `train`, `validation`, and `tokenizer`. FineWeb saves `train`, `valid`, and `tokenizer`. Set the config paths accordingly.
 
+### Reproducibility
+The original `cerebras/SlimPajama-627B` dataset is no longer available on Hugging Face. Initial experiments used the original dataset, while some later experiments used a reupload. Differences in data ordering may affect exact numerical reproducibility but do not invalidate the reported observations.
+
+One ablation using the original dataset exhibited sporadic hidden-state variance expansion and vanishing gradients, which KiteNorm prevented. This instability may not occur in a rerun using the reupload. The original data preparation used `nrows = 15_000_000` and `seq_len = 2048`.
+
 ## Configuration
 
 Edit `config/TR_4xB200_KiteNorm.yaml` and set:
