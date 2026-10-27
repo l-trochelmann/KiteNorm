@@ -7,10 +7,18 @@ Paper: coming soon.
 ## Installation
 
 This project uses Python 3.12, PyTorch 2.7.1, and CUDA 12.8.
+
+Install with conda:
 ```bash
 conda create --name kitenorm python=3.12 -y
 conda activate kitenorm
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+```
+or uv:
+```bash
+uv venv --python 3.12 --prompt kitenorm
+source .venv/bin/activate
+uv pip install -r requirements.txt --torch-backend=cu128
 ```
 
 Authenticate with `wandb login`, or set `WANDB_MODE=offline`. Before use, replace path placeholders in:
