@@ -2,8 +2,6 @@
 
 Reference implementation for KiteNorm, based on [PlainLM](https://github.com/Niccolo-Ajroldi/plainLM).
 
-Paper: coming soon.
-
 ## Installation
 
 This project uses Python 3.12, PyTorch 2.7.1, and CUDA 12.8.
